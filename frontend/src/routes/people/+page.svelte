@@ -24,6 +24,7 @@
 
 	const categoryOptions = ['All', 'New', 'Active', 'Warm', 'Watch'];
 	const contactTypeOptions = ['Email', 'Phone', 'WeChat', 'WhatsApp', 'Telegram', 'Website'];
+	const peoplePageSize = 100;
 	type PersonSortField = 'display_name' | 'relationship_category' | 'primary_location' | 'relationship_score';
 	type SortDirection = 'none' | 'asc' | 'desc';
 	type EditableContactMethod = {
@@ -36,6 +37,8 @@
 	};
 
 	let loading = $state(true);
+	let loadingMorePeople = $state(false);
+	let hasMorePeople = $state(true);
 	let saving = $state(false);
 	let savingSelection = $state(false);
 	let editingSelected = $state(false);
@@ -46,9 +49,13 @@
 	let personSortField = $state<PersonSortField | null>(null);
 	let personSortDirection = $state<SortDirection>('none');
 	let people = $state<Person[]>([]);
+	let peopleOffset = $state(0);
 	let organizations = $state<Organization[]>([]);
 	let selectedId = $state('');
 	let selectedPersonDetail = $state<PersonDetail | null>(null);
+	let directoryViewport: HTMLDivElement | null = null;
+	let hasLoadedInitialPeople = $state(false);
+	let searchDebounceHandle: ReturnType<typeof setTimeout> | null = null;
 
 	let selectedEditForm = $state({
 		display_name: '',
@@ -110,6 +117,26 @@
 
 	onMount(async () => {
 		await Promise.all([loadPeople(), loadOrganizations()]);
+		hasLoadedInitialPeople = true;
+	});
+
+	$effect(() => {
+		query;
+		category;
+		city;
+
+			if (!hasLoadedInitialPeople) return;
+			if (searchDebounceHandle) clearTimeout(searchDebounceHandle);
+			searchDebounceHandle = setTimeout(() => {
+				void loadPeople();
+			}, 300);
+
+		return () => {
+			if (searchDebounceHandle) {
+				clearTimeout(searchDebounceHandle);
+				searchDebounceHandle = null;
+			}
+		};
 	});
 
 	function compareText(left: string | null | undefined, right: string | null | undefined, direction: Exclude<SortDirection, 'none'>) {
@@ -263,28 +290,67 @@
 		}, existing.length ? [] : primaryProfile ? [primaryProfile] : []);
 	}
 
-	async function loadPeople() {
-		loading = true;
+	function syncSelectedPersonFromAvailable(available: Person[]) {
+		if (!selectedId && available[0]) {
+			selectedId = available[0].id;
+		}
+		if (selectedId && !available.some((person) => person.id === selectedId) && available[0]) {
+			selectedId = available[0].id;
+		}
+	}
+
+	async function loadPeople(reset = true) {
+		if (reset) {
+			loading = true;
+			peopleOffset = 0;
+			hasMorePeople = true;
+		} else {
+			if (!hasMorePeople || loadingMorePeople) return;
+			loadingMorePeople = true;
+		}
 		error = '';
 		try {
-			people = await listPeople({
+			const nextPeople = await listPeople({
 				q: query,
 				relationship_category: category === 'All' ? undefined : category,
 				city: city || undefined,
-				limit: 100
+				limit: peoplePageSize,
+				offset: reset ? 0 : peopleOffset
 			});
-			const available = sortPeople(people, personSortField, personSortDirection);
-			if (!selectedId && available[0]) {
-				selectedId = available[0].id;
-			}
-			if (selectedId && !available.some((person) => person.id === selectedId) && available[0]) {
-				selectedId = available[0].id;
+			people = reset ? nextPeople : [...people, ...nextPeople];
+			peopleOffset = people.length;
+			hasMorePeople = nextPeople.length === peoplePageSize;
+			syncSelectedPersonFromAvailable(sortPeople(people, personSortField, personSortDirection));
+			if (reset && directoryViewport) {
+				directoryViewport.scrollTop = 0;
 			}
 		} catch (err) {
 			error = err instanceof Error ? err.message : 'Failed to load people.';
 		} finally {
-			loading = false;
+			if (reset) {
+				loading = false;
+			} else {
+				loadingMorePeople = false;
+			}
 		}
+	}
+
+	async function maybeLoadMorePeople() {
+		if (!directoryViewport || loading || loadingMorePeople || !hasMorePeople) return;
+		const threshold = 120;
+		const remaining =
+			directoryViewport.scrollHeight - directoryViewport.scrollTop - directoryViewport.clientHeight;
+		if (remaining <= threshold) {
+			await loadPeople(false);
+		}
+	}
+
+	function refreshPeopleNow() {
+		if (searchDebounceHandle) {
+			clearTimeout(searchDebounceHandle);
+			searchDebounceHandle = null;
+		}
+		void loadPeople();
 	}
 
 	async function loadOrganizations() {
@@ -554,7 +620,10 @@
 		<p class="meta">{people.length} records</p>
 	</header>
 
-	<section class="toolbar">
+	<form class="toolbar" onsubmit={(event) => {
+		event.preventDefault();
+		refreshPeopleNow();
+	}}>
 		<label>
 			<span>Search</span>
 			<input bind:value={query} placeholder="Name, location, notes, how you met" />
@@ -571,8 +640,8 @@
 			<span>City</span>
 			<input bind:value={city} placeholder="Filter city" />
 		</label>
-		<button type="button" onclick={loadPeople}>Refresh</button>
-	</section>
+		<button type="submit">Refresh</button>
+	</form>
 
 	{#if error}
 		<p class="notice error">{error}</p>
@@ -583,10 +652,10 @@
 			<div class="panel-header">
 				<div>
 					<h2>Directory</h2>
-					<span>{loading ? 'Loading…' : 'Live'}</span>
+					<span>{loading ? 'Loading…' : hasMorePeople ? `${people.length}+ loaded` : `${people.length} loaded`}</span>
 				</div>
 			</div>
-			<div class="table">
+			<div bind:this={directoryViewport} class="table directory-scroll" onscroll={maybeLoadMorePeople}>
 				<div class="row head">
 					<button class="sort-button" type="button" onclick={() => toggleSort('display_name')}>Name {sortIndicator('display_name')}</button>
 					<button class="sort-button" type="button" onclick={() => toggleSort('relationship_category')}>Category {sortIndicator('relationship_category')}</button>
@@ -606,6 +675,11 @@
 						<span>{person.primary_location || '—'}</span>
 					</button>
 				{/each}
+				{#if loadingMorePeople}
+					<p class="list-status">Loading more people…</p>
+				{:else if !hasMorePeople && people.length}
+					<p class="list-status">End of directory.</p>
+				{/if}
 			</div>
 		</section>
 
@@ -1128,12 +1202,20 @@
 	.workspace {
 		grid-template-columns: 1.2fr 1fr 0.95fr;
 		margin-top: 1rem;
+		align-items: start;
 	}
 
 	.panel {
 		border: 1px solid var(--line-strong);
 		background: var(--panel-strong);
 		box-shadow: var(--shadow);
+		min-height: 34rem;
+	}
+
+	.list-panel {
+		display: flex;
+		flex-direction: column;
+		height: min(72vh, calc(100vh - 12rem));
 		min-height: 34rem;
 	}
 
@@ -1181,6 +1263,14 @@
 		padding: 0 0.85rem 0.85rem;
 	}
 
+	.directory-scroll {
+		flex: 1;
+		min-height: 0;
+		height: 100%;
+		overflow-y: auto;
+		align-content: start;
+	}
+
 	.row {
 		display: grid;
 		grid-template-columns: 1.5fr 0.8fr 0.9fr;
@@ -1218,6 +1308,14 @@
 
 	.item.selected {
 		background: var(--selection-row-bg);
+	}
+
+	.list-status {
+		margin: 0;
+		padding: 0.9rem 0;
+		font-size: 0.8rem;
+		color: var(--muted);
+		text-align: center;
 	}
 
 	.detail-grid,

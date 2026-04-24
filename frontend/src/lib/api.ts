@@ -228,7 +228,7 @@ function withQuery(path: string, params: Record<string, QueryValue>): string {
 }
 
 export function listPeople(
-	params: { q?: string; relationship_category?: string; city?: string; limit?: number } = {}
+	params: { q?: string; relationship_category?: string; city?: string; limit?: number; offset?: number } = {}
 ) {
 	return request<Person[]>(withQuery('/people', params));
 }

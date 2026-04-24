@@ -254,6 +254,28 @@ export function createPerson(payload: {
 	});
 }
 
+export function updatePerson(
+	personId: string,
+	payload: {
+		display_name?: string;
+		given_name?: string | null;
+		family_name?: string | null;
+		nickname?: string | null;
+		pronouns?: string | null;
+		short_bio?: string | null;
+		relationship_summary?: string | null;
+		how_we_met?: string | null;
+		first_met_date?: string | null;
+		primary_location?: string | null;
+		notes?: string | null;
+	}
+) {
+	return request<PersonDetail>(`/people/${personId}`, {
+		method: 'PATCH',
+		body: JSON.stringify(payload)
+	});
+}
+
 export function addPersonTag(personId: string, payload: { name: string; color?: string }) {
 	return request<PersonDetail>(`/people/${personId}/tags`, {
 		method: 'POST',
@@ -297,6 +319,39 @@ export function getOrganization(organizationId: string) {
 	return request<OrganizationDetail>(`/organizations/${organizationId}`);
 }
 
+export function createOrganization(payload: {
+	name: string;
+	type: string;
+	website?: string;
+	description?: string;
+	industry?: string;
+	location?: string;
+	notes?: string;
+}) {
+	return request<Organization>(`/organizations`, {
+		method: 'POST',
+		body: JSON.stringify(payload)
+	});
+}
+
+export function updateOrganization(
+	organizationId: string,
+	payload: {
+		name?: string;
+		type?: string;
+		website?: string | null;
+		description?: string | null;
+		industry?: string | null;
+		location?: string | null;
+		notes?: string | null;
+	}
+) {
+	return request<OrganizationDetail>(`/organizations/${organizationId}`, {
+		method: 'PATCH',
+		body: JSON.stringify(payload)
+	});
+}
+
 export function addOrganizationTag(organizationId: string, payload: { name: string; color?: string }) {
 	return request<OrganizationDetail>(`/organizations/${organizationId}/tags`, {
 		method: 'POST',
@@ -320,6 +375,10 @@ export function listEvents(
 	return request<Event[]>(withQuery('/events', params));
 }
 
+export function getEvent(eventId: string) {
+	return request<Event>(`/events/${eventId}`);
+}
+
 export function createEvent(payload: {
 	title: string;
 	type: string;
@@ -336,6 +395,29 @@ export function createEvent(payload: {
 }) {
 	return request<Event>('/events', {
 		method: 'POST',
+		body: JSON.stringify(payload)
+	});
+}
+
+export function updateEvent(
+	eventId: string,
+	payload: {
+		title?: string;
+		type?: string;
+		started_at?: string;
+		ended_at?: string | null;
+		duration_minutes?: number | null;
+		context?: string | null;
+		summary?: string | null;
+		notes?: string | null;
+		sentiment?: string | null;
+		person_ids?: string[];
+		organization_ids?: string[];
+		location_ids?: string[];
+	}
+) {
+	return request<Event>(`/events/${eventId}`, {
+		method: 'PATCH',
 		body: JSON.stringify(payload)
 	});
 }

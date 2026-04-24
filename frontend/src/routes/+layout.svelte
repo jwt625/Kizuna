@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
+	import { resolve } from '$app/paths';
 	import { page } from '$app/state';
 
 	type ThemeMode = 'light' | 'dark';
@@ -14,25 +15,25 @@
 		{ href: '/search', label: 'Search' },
 		{ href: '/imports', label: 'Imports' },
 		{ href: '/exports', label: 'Exports' }
-	];
+	] as const;
 
 	let { children } = $props();
 	let theme = $state<ThemeMode>('light');
 
 	function applyTheme(nextTheme: ThemeMode) {
 		theme = nextTheme;
-		document.documentElement.dataset.theme = nextTheme;
+		globalThis.document.documentElement.dataset.theme = nextTheme;
 	}
 
 	function toggleTheme() {
 		const nextTheme = theme === 'light' ? 'dark' : 'light';
 		applyTheme(nextTheme);
-		localStorage.setItem(themeStorageKey, nextTheme);
+		globalThis.localStorage.setItem(themeStorageKey, nextTheme);
 	}
 
 	onMount(() => {
-		const media = window.matchMedia('(prefers-color-scheme: dark)');
-		const savedTheme = localStorage.getItem(themeStorageKey);
+		const media = globalThis.window.matchMedia('(prefers-color-scheme: dark)');
+		const savedTheme = globalThis.localStorage.getItem(themeStorageKey);
 		const initialTheme =
 			savedTheme === 'light' || savedTheme === 'dark'
 				? savedTheme
@@ -43,7 +44,7 @@
 		applyTheme(initialTheme);
 
 		const handleChange = (event: MediaQueryListEvent) => {
-			if (localStorage.getItem(themeStorageKey)) {
+			if (globalThis.localStorage.getItem(themeStorageKey)) {
 				return;
 			}
 			applyTheme(event.matches ? 'dark' : 'light');
@@ -72,7 +73,7 @@
 		<nav class="sectionbar" aria-label="Primary">
 			{#each sections as section (section.href)}
 				<a
-					href={section.href}
+					href={resolve(section.href)}
 					class:active={page.url.pathname === section.href}
 					aria-current={page.url.pathname === section.href ? 'page' : undefined}
 				>
@@ -120,6 +121,7 @@
 		--muted: #626262;
 		--muted-soft: #7c7c77;
 		--accent: #111111;
+		--selection-row-bg: #eceae1;
 		--radius: 0;
 		--shadow: 0 0 0 1px rgba(17, 17, 17, 0.06);
 		font-family:
@@ -139,6 +141,7 @@
 		--muted: #bbbbaf;
 		--muted-soft: #949488;
 		--accent: #f5f5f0;
+		--selection-row-bg: #23292a;
 		--shadow: 0 0 0 1px rgba(255, 255, 255, 0.04);
 		color-scheme: dark;
 	}

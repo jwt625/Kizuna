@@ -1,21 +1,46 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { resolve } from '$app/paths';
+	import DateTimeField from '$lib/components/DateTimeField.svelte';
 	import {
 		completeReminder,
 		createReminder,
 		listReminders,
 		snoozeReminder,
+		updateReminder,
 		type Reminder
 	} from '$lib/api';
 
-	const statusOptions = ['All', 'Open', 'Done'];
+	const statusOptions = ['All', 'Open', 'Snoozed', 'Done'];
+	const entityOptions = ['Person', 'Organization', 'Event', 'PipelineItem', 'General'];
+	const sortOptions = [
+		{ value: 'due_at', label: 'Due' },
+		{ value: 'title', label: 'Title' },
+		{ value: 'status', label: 'Status' },
+		{ value: 'priority', label: 'Priority' }
+	] as const;
+
+	type SortField = (typeof sortOptions)[number]['value'];
 
 	let loading = $state(true);
 	let saving = $state(false);
+	let savingSelection = $state(false);
+	let editingSelected = $state(false);
 	let error = $state('');
 	let status = $state('All');
+	let sortField = $state<SortField>('due_at');
+	let sortDirection = $state<'asc' | 'desc'>('asc');
 	let reminders = $state<Reminder[]>([]);
+	let selectedId = $state('');
+
+	let selectedEditForm = $state({
+		title: '',
+		due_at: '',
+		priority: 'Normal',
+		status: 'Open',
+		entity_type: 'Person',
+		notes: ''
+	});
 
 	let form = $state({
 		title: '',
@@ -25,7 +50,37 @@
 		notes: ''
 	});
 
+	const sortedReminders = $derived(sortReminders(reminders, sortField, sortDirection));
+	const selectedReminder = $derived(sortedReminders.find((item) => item.id === selectedId) ?? sortedReminders[0] ?? null);
+
+	$effect(() => {
+		if (selectedReminder && !editingSelected) {
+			syncSelectedEditForm(selectedReminder);
+		}
+	});
+
 	onMount(loadReminders);
+
+	function sortReminders(items: Reminder[], field: SortField, direction: 'asc' | 'desc') {
+		const factor = direction === 'asc' ? 1 : -1;
+		return [...items].sort((left, right) => {
+			if (field === 'due_at') {
+				return (new Date(left.due_at).getTime() - new Date(right.due_at).getTime()) * factor;
+			}
+			return ((left[field] || '').localeCompare(right[field] || '')) * factor;
+		});
+	}
+
+	function syncSelectedEditForm(reminder: Reminder) {
+		selectedEditForm = {
+			title: reminder.title,
+			due_at: reminder.due_at.slice(0, 16),
+			priority: reminder.priority,
+			status: reminder.status,
+			entity_type: reminder.entity_type || 'General',
+			notes: reminder.notes || ''
+		};
+	}
 
 	async function loadReminders() {
 		loading = true;
@@ -35,10 +90,52 @@
 				status: status === 'All' ? undefined : status,
 				limit: 100
 			});
+			const available = sortReminders(reminders, sortField, sortDirection);
+			if (!selectedId && available[0]) {
+				selectedId = available[0].id;
+			}
+			if (selectedId && !available.some((reminder) => reminder.id === selectedId) && available[0]) {
+				selectedId = available[0].id;
+			}
 		} catch (err) {
 			error = err instanceof Error ? err.message : 'Failed to load reminders.';
 		} finally {
 			loading = false;
+		}
+	}
+
+	function startEditingSelected() {
+		if (!selectedReminder) return;
+		syncSelectedEditForm(selectedReminder);
+		editingSelected = true;
+	}
+
+	function cancelEditingSelected() {
+		if (selectedReminder) {
+			syncSelectedEditForm(selectedReminder);
+		}
+		editingSelected = false;
+	}
+
+	async function saveSelectedReminder() {
+		if (!selectedReminder || !selectedEditForm.title || !selectedEditForm.due_at) return;
+		savingSelection = true;
+		error = '';
+		try {
+			await updateReminder(selectedReminder.id, {
+				title: selectedEditForm.title,
+				due_at: new Date(selectedEditForm.due_at).toISOString(),
+				priority: selectedEditForm.priority,
+				status: selectedEditForm.status,
+				entity_type: selectedEditForm.entity_type,
+				notes: selectedEditForm.notes || null
+			});
+			editingSelected = false;
+			await loadReminders();
+		} catch (err) {
+			error = err instanceof Error ? err.message : 'Failed to update reminder.';
+		} finally {
+			savingSelection = false;
 		}
 	}
 
@@ -129,8 +226,27 @@
 	<section class="workspace">
 		<section class="panel">
 			<div class="panel-header">
-				<h2>Queue</h2>
-				<span>{loading ? 'Loading…' : 'Sorted by due date'}</span>
+				<div>
+					<h2>Directory</h2>
+					<span>{loading ? 'Loading…' : 'Sorted queue'}</span>
+				</div>
+				<div class="header-controls">
+					<label>
+						<span>Sort</span>
+						<select bind:value={sortField}>
+							{#each sortOptions as option (option.value)}
+								<option value={option.value}>{option.label}</option>
+							{/each}
+						</select>
+					</label>
+					<label>
+						<span>Direction</span>
+						<select bind:value={sortDirection}>
+							<option value="asc">Asc</option>
+							<option value="desc">Desc</option>
+						</select>
+					</label>
+				</div>
 			</div>
 			<div class="table">
 				<div class="row head">
@@ -139,46 +255,136 @@
 					<span>Status</span>
 					<span>Action</span>
 				</div>
-				{#each reminders as reminder (reminder.id)}
-					<div class="row">
+				{#each sortedReminders as reminder (reminder.id)}
+					<button class:selected={selectedReminder?.id === reminder.id} class="row item" onclick={() => {
+						selectedId = reminder.id;
+						editingSelected = false;
+					}}>
 						<span>
 							<strong>{reminder.title}</strong>
 							<small>{reminder.priority} · {reminder.entity_type || 'General'}</small>
 						</span>
 						<span>{formatDateTime(reminder.due_at)}</span>
 						<span>{reminder.status}</span>
-						<span>
-							{#if reminder.status === 'Done'}
-								Closed
-							{:else}
-								<div class="inline-actions">
-									<button type="button" onclick={() => markDone(reminder)}>Done</button>
-									<button type="button" onclick={() => snoozeOneDay(reminder)}>+1d</button>
-								</div>
-							{/if}
-						</span>
-					</div>
+						<span>{reminder.status === 'Done' ? 'Closed' : 'Open'}</span>
+					</button>
 				{/each}
 			</div>
 		</section>
 
 		<section class="panel">
 			<div class="panel-header">
-				<h2>New reminder</h2>
-				<span>Quick add</span>
+				<div>
+					<h2>Selected record</h2>
+					<span>{selectedReminder ? selectedReminder.priority : 'No selection'}</span>
+				</div>
+				{#if selectedReminder}
+					<div class="inline-actions">
+						{#if selectedReminder.status !== 'Done'}
+							<button type="button" onclick={() => markDone(selectedReminder)}>Done</button>
+							<button type="button" onclick={() => snoozeOneDay(selectedReminder)}>+1d</button>
+						{/if}
+						{#if editingSelected}
+							<button type="button" onclick={cancelEditingSelected}>Cancel</button>
+							<button type="button" onclick={saveSelectedReminder} disabled={savingSelection}>
+								{savingSelection ? 'Saving…' : 'Save'}
+							</button>
+						{:else}
+							<button type="button" onclick={startEditingSelected}>Edit</button>
+						{/if}
+					</div>
+				{/if}
+			</div>
+			{#if selectedReminder}
+				<div class="detail-grid">
+					{#if editingSelected}
+						<label class="wide">
+							<span>Title</span>
+							<input bind:value={selectedEditForm.title} />
+						</label>
+						<div class="wide">
+							<DateTimeField bind:value={selectedEditForm.due_at} label="Due at" required />
+						</div>
+						<label>
+							<span>Priority</span>
+							<select bind:value={selectedEditForm.priority}>
+								<option>Low</option>
+								<option>Normal</option>
+								<option>High</option>
+							</select>
+						</label>
+						<label>
+							<span>Status</span>
+							<select bind:value={selectedEditForm.status}>
+								<option>Open</option>
+								<option>Snoozed</option>
+								<option>Done</option>
+								<option>Canceled</option>
+							</select>
+						</label>
+						<label class="wide">
+							<span>Entity type</span>
+							<select bind:value={selectedEditForm.entity_type}>
+								{#each entityOptions as option (option)}
+									<option value={option}>{option}</option>
+								{/each}
+							</select>
+						</label>
+						<label class="wide">
+							<span>Notes</span>
+							<textarea bind:value={selectedEditForm.notes} rows="6"></textarea>
+						</label>
+					{:else}
+						<div class="field">
+							<span>Title</span>
+							<strong>{selectedReminder.title}</strong>
+						</div>
+						<div class="field">
+							<span>Due</span>
+							<strong>{formatDateTime(selectedReminder.due_at)}</strong>
+						</div>
+						<div class="field">
+							<span>Status</span>
+							<strong>{selectedReminder.status}</strong>
+						</div>
+						<div class="field">
+							<span>Priority</span>
+							<strong>{selectedReminder.priority}</strong>
+						</div>
+						<div class="field wide">
+							<span>Entity</span>
+							<p>{selectedReminder.entity_type || 'General'} {selectedReminder.entity_id || ''}</p>
+						</div>
+						<div class="field wide">
+							<span>Notes</span>
+							<p>{selectedReminder.notes || 'No notes yet.'}</p>
+						</div>
+					{/if}
+				</div>
+			{:else}
+				<p class="notice">No reminder selected.</p>
+			{/if}
+		</section>
+
+		<section class="panel">
+			<div class="panel-header">
+				<div>
+					<h2>Actions</h2>
+					<span>Quick add</span>
+				</div>
 			</div>
 			<form onsubmit={(event) => {
 				event.preventDefault();
 				submitReminder();
 			}}>
+				<h3>New reminder</h3>
 				<label class="wide">
 					<span>Title</span>
 					<input bind:value={form.title} required />
 				</label>
-				<label>
-					<span>Due at</span>
-					<input bind:value={form.due_at} required type="datetime-local" />
-				</label>
+				<div class="wide">
+					<DateTimeField bind:value={form.due_at} label="Due at" required />
+				</div>
 				<label>
 					<span>Priority</span>
 					<select bind:value={form.priority}>
@@ -190,9 +396,9 @@
 				<label>
 					<span>Entity type</span>
 					<select bind:value={form.entity_type}>
-						<option>Person</option>
-						<option>Organization</option>
-						<option>General</option>
+						{#each entityOptions as option (option)}
+							<option value={option}>{option}</option>
+						{/each}
 					</select>
 				</label>
 				<label class="wide">
@@ -213,8 +419,7 @@
 
 	.topbar,
 	.toolbar,
-	.workspace,
-	form {
+	.workspace {
 		display: grid;
 		gap: 1rem;
 	}
@@ -226,11 +431,23 @@
 		border-bottom: 1px solid var(--line-strong);
 	}
 
+	.toolbar {
+		grid-template-columns: 14rem auto;
+		align-items: end;
+		margin-top: 1rem;
+	}
+
+	.workspace {
+		grid-template-columns: 1.2fr 1fr 0.9fr;
+		margin-top: 1rem;
+	}
+
 	.brand,
 	.meta,
 	.panel-header span,
 	label span,
-	.row.head {
+	.row.head,
+	.field span {
 		font-size: 0.72rem;
 		text-transform: uppercase;
 		letter-spacing: 0.12em;
@@ -244,22 +461,16 @@
 		letter-spacing: -0.05em;
 	}
 
-	h2 {
+	h2,
+	h3 {
 		margin: 0;
 		font-size: 0.9rem;
 		text-transform: uppercase;
 		letter-spacing: 0.08em;
 	}
 
-	.toolbar {
-		grid-template-columns: 14rem auto;
-		align-items: end;
-		margin-top: 1rem;
-	}
-
-	.workspace {
-		grid-template-columns: 1.5fr 0.9fr;
-		margin-top: 1rem;
+	h3 {
+		font-size: 0.84rem;
 	}
 
 	.panel {
@@ -271,9 +482,16 @@
 	.panel-header {
 		display: flex;
 		justify-content: space-between;
-		align-items: center;
+		align-items: flex-end;
+		gap: 0.75rem;
 		padding: 0.75rem 0.85rem;
 		border-bottom: 1px solid var(--line);
+	}
+
+	.header-controls,
+	.inline-actions {
+		display: flex;
+		gap: 0.6rem;
 	}
 
 	.table {
@@ -288,6 +506,8 @@
 		padding: 0.75rem 0;
 		border-bottom: 1px solid var(--line);
 		align-items: center;
+		text-align: left;
+		background: transparent;
 	}
 
 	.row strong,
@@ -300,8 +520,21 @@
 		color: var(--muted);
 	}
 
+	.item {
+		border-left: 0;
+		border-right: 0;
+		border-top: 0;
+	}
+
+	.item.selected {
+		background: var(--selection-row-bg);
+	}
+
+	.detail-grid,
 	form {
+		display: grid;
 		grid-template-columns: repeat(2, minmax(0, 1fr));
+		gap: 0.85rem;
 		padding: 0.85rem;
 	}
 
@@ -325,9 +558,20 @@
 		cursor: pointer;
 	}
 
-	.inline-actions {
-		display: flex;
-		gap: 0.4rem;
+	.field {
+		display: grid;
+		gap: 0.3rem;
+		padding-bottom: 0.8rem;
+		border-bottom: 1px solid var(--line);
+	}
+
+	.field strong,
+	.field p {
+		margin: 0;
+	}
+
+	.wide {
+		grid-column: 1 / -1;
 	}
 
 	.notice {
@@ -337,16 +581,20 @@
 		background: var(--panel-strong);
 	}
 
-	.wide {
-		grid-column: 1 / -1;
-	}
-
-	@media (max-width: 960px) {
+	@media (max-width: 1100px) {
 		.toolbar,
 		.workspace,
 		.row,
+		.detail-grid,
 		form {
 			grid-template-columns: 1fr;
+		}
+
+		.panel-header,
+		.header-controls,
+		.inline-actions {
+			flex-direction: column;
+			align-items: stretch;
 		}
 	}
 </style>

@@ -23,8 +23,17 @@
 	import { normalizeExternalHref } from '$lib/utils/links';
 
 	const categoryOptions = ['All', 'New', 'Active', 'Warm', 'Watch'];
+	const contactTypeOptions = ['Email', 'Phone', 'WeChat', 'WhatsApp', 'Telegram', 'Website'];
 	type PersonSortField = 'display_name' | 'relationship_category' | 'primary_location' | 'relationship_score';
 	type SortDirection = 'none' | 'asc' | 'desc';
+	type EditableContactMethod = {
+		id: string;
+		type: string;
+		value: string;
+		label: string;
+		is_primary: boolean;
+		notes: string | null;
+	};
 
 	let loading = $state(true);
 	let saving = $state(false);
@@ -49,6 +58,9 @@
 		first_met_date: '',
 		relationship_summary: '',
 		how_we_met: '',
+		contact_methods: [] as EditableContactMethod[],
+		profile_platform: 'LinkedIn',
+		profile_url: '',
 		notes: ''
 	});
 
@@ -142,6 +154,7 @@
 	}
 
 	function syncSelectedEditForm(detail: PersonDetail) {
+		const primaryProfile = detail.external_profiles[0] ?? null;
 		selectedEditForm = {
 			display_name: detail.display_name || '',
 			given_name: detail.given_name || '',
@@ -150,8 +163,104 @@
 			first_met_date: detail.first_met_date || '',
 			relationship_summary: detail.relationship_summary || '',
 			how_we_met: detail.how_we_met || '',
+			contact_methods: detail.contact_methods.length
+				? detail.contact_methods.map((method) => ({
+						id: method.id,
+						type: method.type,
+						value: method.value,
+						label: method.label || '',
+						is_primary: method.is_primary,
+						notes: method.notes
+					}))
+				: [createEmptyContactMethod()],
+			profile_platform: primaryProfile?.platform || 'LinkedIn',
+			profile_url: primaryProfile?.url_or_handle || '',
 			notes: detail.notes || ''
 		};
+	}
+
+	function createEmptyContactMethod(): EditableContactMethod {
+		return {
+			id: crypto.randomUUID(),
+			type: 'Email',
+			value: '',
+			label: '',
+			is_primary: false,
+			notes: null
+		};
+	}
+
+	function addEditableContactMethod() {
+		selectedEditForm.contact_methods = [...selectedEditForm.contact_methods, createEmptyContactMethod()];
+	}
+
+	function removeEditableContactMethod(contactId: string) {
+		const remaining = selectedEditForm.contact_methods.filter((method) => method.id !== contactId);
+		if (!remaining.length) {
+			selectedEditForm.contact_methods = [createEmptyContactMethod()];
+			return;
+		}
+		const hasPrimary = remaining.some((method) => method.is_primary);
+		selectedEditForm.contact_methods = remaining.map((method, index) => ({
+			...method,
+			is_primary: hasPrimary ? method.is_primary : index === 0
+		}));
+	}
+
+	function setPrimaryContactMethod(contactId: string) {
+		selectedEditForm.contact_methods = selectedEditForm.contact_methods.map((method) => ({
+			...method,
+			is_primary: method.id === contactId
+		}));
+	}
+
+	function buildUpdatedContactMethods() {
+		const populated = selectedEditForm.contact_methods.filter((method) => method.value.trim());
+		if (!populated.length) return [];
+		const hasPrimary = populated.some((method) => method.is_primary);
+		return populated.map((method, index) => ({
+			type: method.type,
+			value: method.value.trim(),
+			label: method.label.trim() || null,
+			is_primary: hasPrimary ? method.is_primary : index === 0,
+			notes: method.notes
+		}));
+	}
+
+	function buildUpdatedExternalProfiles(detail: PersonDetail) {
+		const existing = detail.external_profiles;
+		const primaryProfile = selectedEditForm.profile_url
+			? {
+					platform: selectedEditForm.profile_platform,
+					url_or_handle: selectedEditForm.profile_url,
+					label: existing[0]?.label || null,
+					notes: existing[0]?.notes || null,
+					last_checked_at: existing[0]?.last_checked_at || null
+				}
+			: null;
+
+		return existing.reduce<
+			Array<{
+				platform: string;
+				url_or_handle: string;
+				label: string | null;
+				notes: string | null;
+				last_checked_at: string | null;
+			}>
+		>((items, profile, index) => {
+			if (index === 0) {
+				if (primaryProfile) items.push(primaryProfile);
+				return items;
+			}
+			items.push({
+				platform: profile.platform,
+				url_or_handle: profile.url_or_handle,
+				label: profile.label,
+				notes: profile.notes,
+				last_checked_at: profile.last_checked_at
+			});
+			return items;
+		}, existing.length ? [] : primaryProfile ? [primaryProfile] : []);
 	}
 
 	async function loadPeople() {
@@ -214,7 +323,7 @@
 	}
 
 	async function saveSelectedPerson() {
-		if (!selectedId) return;
+		if (!selectedId || !selectedPersonDetail) return;
 		savingSelection = true;
 		error = '';
 		try {
@@ -226,6 +335,8 @@
 				first_met_date: selectedEditForm.first_met_date || null,
 				relationship_summary: selectedEditForm.relationship_summary || null,
 				how_we_met: selectedEditForm.how_we_met || null,
+				contact_methods: buildUpdatedContactMethods(),
+				external_profiles: buildUpdatedExternalProfiles(selectedPersonDetail),
 				notes: selectedEditForm.notes || null
 			});
 			editingSelected = false;
@@ -551,6 +662,62 @@
 						<label class="wide">
 							<span>How we met</span>
 							<textarea bind:value={selectedEditForm.how_we_met} rows="3"></textarea>
+						</label>
+						<div class="field wide">
+							<div class="section-heading">
+								<span>Contact methods</span>
+								<button type="button" onclick={addEditableContactMethod}>Add contact</button>
+							</div>
+							<div class="stacked-collection">
+								{#each selectedEditForm.contact_methods as method, index (method.id)}
+									<div class="collection-row">
+										<label>
+											<span>Type</span>
+											<select bind:value={method.type}>
+												{#each contactTypeOptions as option (option)}
+													<option value={option}>{option}</option>
+												{/each}
+											</select>
+										</label>
+										<label>
+											<span>Value</span>
+											<input bind:value={method.value} />
+										</label>
+										<label>
+											<span>Label</span>
+											<input bind:value={method.label} placeholder="Personal, work, assistant" />
+										</label>
+										<label class="inline-toggle">
+											<input
+												checked={method.is_primary}
+												name="primary-contact-method"
+												onchange={() => setPrimaryContactMethod(method.id)}
+												type="radio"
+											/>
+											<span>Primary</span>
+										</label>
+										<button
+											type="button"
+											onclick={() => removeEditableContactMethod(method.id)}
+										>
+											{selectedEditForm.contact_methods.length === 1 && index === 0 ? 'Clear' : 'Remove'}
+										</button>
+									</div>
+								{/each}
+							</div>
+						</div>
+						<label>
+							<span>Profile platform</span>
+							<select bind:value={selectedEditForm.profile_platform}>
+								<option>LinkedIn</option>
+								<option>Website</option>
+								<option>X</option>
+								<option>GitHub</option>
+							</select>
+						</label>
+						<label class="wide">
+							<span>Profile URL or handle</span>
+							<input bind:value={selectedEditForm.profile_url} />
 						</label>
 						<label class="wide">
 							<span>Notes</span>
@@ -1078,6 +1245,49 @@
 		margin: 0;
 	}
 
+	.section-heading {
+		display: flex;
+		justify-content: space-between;
+		align-items: center;
+		gap: 0.75rem;
+		margin-bottom: 0.75rem;
+	}
+
+	.section-heading button,
+	.collection-row button {
+		width: auto;
+	}
+
+	.stacked-collection {
+		display: grid;
+		gap: 0.75rem;
+	}
+
+	.collection-row {
+		display: grid;
+		grid-template-columns: 0.9fr 1.4fr 1.1fr auto auto;
+		gap: 0.75rem;
+		padding: 0.75rem;
+		border: 1px solid var(--line);
+		background: var(--panel);
+	}
+
+	.inline-toggle {
+		display: flex;
+		align-items: center;
+		gap: 0.55rem;
+		align-self: end;
+	}
+
+	.inline-toggle input {
+		width: auto;
+		margin: 0;
+	}
+
+	.inline-toggle span {
+		margin: 0;
+	}
+
 	.field ul {
 		padding-left: 1rem;
 	}
@@ -1121,7 +1331,8 @@
 		.workspace,
 		.row,
 		.detail-grid,
-		form {
+		form,
+		.collection-row {
 			grid-template-columns: 1fr;
 		}
 

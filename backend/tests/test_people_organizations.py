@@ -88,6 +88,54 @@ def test_create_and_filter_reminders() -> None:
     assert any(item["id"] == created["id"] for item in list_response.json())
 
 
+def test_update_person_edit_fields_can_replace_primary_contact_and_profile() -> None:
+    client = TestClient(app)
+
+    create_response = client.post(
+        "/api/people",
+        json={
+            "display_name": "Barbara Liskov",
+            "given_name": "Barbara",
+            "contact_methods": [
+                {"type": "Email", "value": "barbara@example.com", "label": "Personal", "is_primary": True},
+                {"type": "Phone", "value": "+1-555-0100", "label": "Mobile", "is_primary": False},
+            ],
+            "external_profiles": [
+                {"platform": "LinkedIn", "url_or_handle": "https://linkedin.com/in/barbara-liskov"},
+                {"platform": "Website", "url_or_handle": "https://example.com/barbara"},
+            ],
+        },
+    )
+
+    assert create_response.status_code == 201
+    person_id = create_response.json()["id"]
+
+    update_response = client.patch(
+        f"/api/people/{person_id}",
+        json={
+            "display_name": "Barbara Liskov",
+            "relationship_summary": "Programming language pioneer",
+            "contact_methods": [
+                {"type": "Website", "value": "https://barbara.example", "label": "Preferred", "is_primary": True},
+                {"type": "Phone", "value": "+1-555-0100", "label": "Mobile", "is_primary": False},
+            ],
+            "external_profiles": [
+                {"platform": "GitHub", "url_or_handle": "https://github.com/bliskov"},
+                {"platform": "Website", "url_or_handle": "https://example.com/barbara"},
+            ],
+        },
+    )
+
+    assert update_response.status_code == 200
+    updated = update_response.json()
+    assert updated["relationship_summary"] == "Programming language pioneer"
+    assert updated["contact_methods"][0]["type"] == "Website"
+    assert updated["contact_methods"][0]["value"] == "https://barbara.example"
+    assert updated["contact_methods"][1]["value"] == "+1-555-0100"
+    assert updated["external_profiles"][0]["platform"] == "GitHub"
+    assert updated["external_profiles"][1]["url_or_handle"] == "https://example.com/barbara"
+
+
 def test_event_updates_person_relationship_timeline_and_score() -> None:
     client = TestClient(app)
 

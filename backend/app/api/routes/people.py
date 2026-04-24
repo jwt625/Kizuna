@@ -261,8 +261,15 @@ def get_person(person_id: UUID, db: DbSession) -> PersonDetailRead:
 def update_person(person_id: UUID, payload: PersonUpdate, db: DbSession) -> PersonDetailRead:
     person = get_person(person_id, db)
     db_person = cast(Person, db.get(Person, person.id))
-    for field, value in payload.model_dump(exclude_unset=True).items():
+    updates = payload.model_dump(exclude_unset=True)
+    contact_methods = updates.pop("contact_methods", None)
+    external_profiles = updates.pop("external_profiles", None)
+    for field, value in updates.items():
         setattr(db_person, field, value)
+    if contact_methods is not None:
+        db_person.contact_methods = [ContactMethod(**item) for item in contact_methods]
+    if external_profiles is not None:
+        db_person.external_profiles = [ExternalProfile(**item) for item in external_profiles]
     db.commit()
     db.refresh(db_person)
     return get_person(db_person.id, db)

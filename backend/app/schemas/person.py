@@ -73,6 +73,8 @@ class PersonUpdate(BaseModel):
     first_met_date: date | None = None
     primary_location: str | None = None
     notes: str | None = None
+    contact_methods: list[ContactMethodCreate] | None = None
+    external_profiles: list[ExternalProfileCreate] | None = None
 
 
 class PersonRead(PersonBase, TimestampedSchema):

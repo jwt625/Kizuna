@@ -268,6 +268,20 @@ export function updatePerson(
 		first_met_date?: string | null;
 		primary_location?: string | null;
 		notes?: string | null;
+		contact_methods?: Array<{
+			type: string;
+			value: string;
+			label?: string | null;
+			is_primary?: boolean;
+			notes?: string | null;
+		}>;
+		external_profiles?: Array<{
+			platform: string;
+			url_or_handle: string;
+			label?: string | null;
+			notes?: string | null;
+			last_checked_at?: string | null;
+		}>;
 	}
 ) {
 	return request<PersonDetail>(`/people/${personId}`, {

@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="frontend/static/icons/kizuna-icon.svg" alt="Kizuna icon" width="140" />
+  <img src="frontend/static/icons/kizuna-icon-white.svg" alt="Kizuna icon" width="140" />
 </p>
 
 <h1 align="center">Kizuna</h1>

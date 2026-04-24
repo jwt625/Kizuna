@@ -64,22 +64,13 @@
 <main class="shell">
 	<section class="topbar">
 		<div class="brand">
-			<img src={resolve('/icons/kizuna-icon.svg')} alt="Kizuna icon" />
+			<img class="icon-light" src="/icons/kizuna-icon.svg" alt="Kizuna icon" />
+			<img class="icon-dark" src="/icons/kizuna-icon-white.svg" alt="Kizuna icon" />
 			<div>
 				<p class="eyebrow">Kizuna</p>
 				<h1>Relationship workspace</h1>
 			</div>
 		</div>
-		<nav>
-			<a href={resolve('/people')}>People</a>
-			<a href={resolve('/organizations')}>Organizations</a>
-			<a href={resolve('/events')}>Events</a>
-			<a href={resolve('/reminders')}>Reminders</a>
-			<a href={resolve('/pipelines')}>Pipelines</a>
-			<a href={resolve('/search')}>Search</a>
-			<a href={resolve('/imports')}>Imports</a>
-			<a href={resolve('/exports')}>Exports</a>
-		</nav>
 	</section>
 
 	{#if error}
@@ -195,15 +186,10 @@
 	}
 
 	.topbar {
-		grid-template-columns: minmax(0, 1fr) auto;
-		align-items: end;
+		grid-template-columns: minmax(0, 1fr);
+		align-items: start;
 		padding-bottom: 1rem;
 		border-bottom: 1px solid var(--line-strong);
-	}
-
-	nav {
-		display: flex;
-		gap: 0.5rem;
 	}
 
 	.brand {
@@ -216,9 +202,21 @@
 		width: 4.5rem;
 		height: 4.5rem;
 		flex: 0 0 auto;
+		display: block;
 	}
 
-	nav a,
+	.brand .icon-dark {
+		display: none;
+	}
+
+	:global(:root[data-theme='dark']) .brand .icon-light {
+		display: none;
+	}
+
+	:global(:root[data-theme='dark']) .brand .icon-dark {
+		display: block;
+	}
+
 	.panel header a {
 		border: 1px solid var(--line);
 		padding: 0.5rem 0.7rem;

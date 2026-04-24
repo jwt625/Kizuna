@@ -1,4 +1,8 @@
-# Kizuna
+<p align="center">
+  <img src="frontend/static/icons/kizuna-icon.svg" alt="Kizuna icon" width="140" />
+</p>
+
+<h1 align="center">Kizuna</h1>
 
 Kizuna is a local-first personal relationship management system for people, organizations, interactions, reminders, and lightweight pipelines.
 

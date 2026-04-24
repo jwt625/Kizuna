@@ -63,9 +63,12 @@
 
 <main class="shell">
 	<section class="topbar">
-		<div>
-			<p class="eyebrow">Kizuna</p>
-			<h1>Relationship workspace</h1>
+		<div class="brand">
+			<img src={resolve('/icons/kizuna-icon.svg')} alt="Kizuna icon" />
+			<div>
+				<p class="eyebrow">Kizuna</p>
+				<h1>Relationship workspace</h1>
+			</div>
 		</div>
 		<nav>
 			<a href={resolve('/people')}>People</a>
@@ -201,6 +204,18 @@
 	nav {
 		display: flex;
 		gap: 0.5rem;
+	}
+
+	.brand {
+		display: flex;
+		align-items: center;
+		gap: 1rem;
+	}
+
+	.brand img {
+		width: 4.5rem;
+		height: 4.5rem;
+		flex: 0 0 auto;
 	}
 
 	nav a,

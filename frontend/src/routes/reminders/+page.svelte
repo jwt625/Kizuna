@@ -13,14 +13,8 @@
 
 	const statusOptions = ['All', 'Open', 'Snoozed', 'Done'];
 	const entityOptions = ['Person', 'Organization', 'Event', 'PipelineItem', 'General'];
-	const sortOptions = [
-		{ value: 'due_at', label: 'Due' },
-		{ value: 'title', label: 'Title' },
-		{ value: 'status', label: 'Status' },
-		{ value: 'priority', label: 'Priority' }
-	] as const;
-
-	type SortField = (typeof sortOptions)[number]['value'];
+	type SortField = 'due_at' | 'title' | 'status' | 'priority';
+	type SortDirection = 'none' | 'asc' | 'desc';
 
 	let loading = $state(true);
 	let saving = $state(false);
@@ -28,8 +22,8 @@
 	let editingSelected = $state(false);
 	let error = $state('');
 	let status = $state('All');
-	let sortField = $state<SortField>('due_at');
-	let sortDirection = $state<'asc' | 'desc'>('asc');
+	let sortField = $state<SortField | null>(null);
+	let sortDirection = $state<SortDirection>('none');
 	let reminders = $state<Reminder[]>([]);
 	let selectedId = $state('');
 
@@ -61,7 +55,10 @@
 
 	onMount(loadReminders);
 
-	function sortReminders(items: Reminder[], field: SortField, direction: 'asc' | 'desc') {
+	function sortReminders(items: Reminder[], field: SortField | null, direction: SortDirection) {
+		if (!field || direction === 'none') {
+			return items;
+		}
 		const factor = direction === 'asc' ? 1 : -1;
 		return [...items].sort((left, right) => {
 			if (field === 'due_at') {
@@ -69,6 +66,29 @@
 			}
 			return ((left[field] || '').localeCompare(right[field] || '')) * factor;
 		});
+	}
+
+	function toggleSort(field: SortField) {
+		if (sortField !== field) {
+			sortField = field;
+			sortDirection = 'asc';
+			return;
+		}
+		if (sortDirection === 'none') {
+			sortDirection = 'asc';
+			return;
+		}
+		if (sortDirection === 'asc') {
+			sortDirection = 'desc';
+			return;
+		}
+		sortField = null;
+		sortDirection = 'none';
+	}
+
+	function sortIndicator(field: SortField) {
+		if (sortField !== field || sortDirection === 'none') return '';
+		return sortDirection === 'asc' ? '↑' : '↓';
 	}
 
 	function syncSelectedEditForm(reminder: Reminder) {
@@ -228,31 +248,14 @@
 			<div class="panel-header">
 				<div>
 					<h2>Directory</h2>
-					<span>{loading ? 'Loading…' : 'Sorted queue'}</span>
-				</div>
-				<div class="header-controls">
-					<label>
-						<span>Sort</span>
-						<select bind:value={sortField}>
-							{#each sortOptions as option (option.value)}
-								<option value={option.value}>{option.label}</option>
-							{/each}
-						</select>
-					</label>
-					<label>
-						<span>Direction</span>
-						<select bind:value={sortDirection}>
-							<option value="asc">Asc</option>
-							<option value="desc">Desc</option>
-						</select>
-					</label>
+					<span>{loading ? 'Loading…' : 'Queue'}</span>
 				</div>
 			</div>
 			<div class="table">
 				<div class="row head">
-					<span>Task</span>
-					<span>Due</span>
-					<span>Status</span>
+					<button class="sort-button" type="button" onclick={() => toggleSort('title')}>Task {sortIndicator('title')}</button>
+					<button class="sort-button" type="button" onclick={() => toggleSort('due_at')}>Due {sortIndicator('due_at')}</button>
+					<button class="sort-button" type="button" onclick={() => toggleSort('status')}>Status {sortIndicator('status')}</button>
 					<span>Action</span>
 				</div>
 				{#each sortedReminders as reminder (reminder.id)}
@@ -488,7 +491,6 @@
 		border-bottom: 1px solid var(--line);
 	}
 
-	.header-controls,
 	.inline-actions {
 		display: flex;
 		gap: 0.6rem;
@@ -528,6 +530,16 @@
 
 	.item.selected {
 		background: var(--selection-row-bg);
+	}
+
+	.sort-button {
+		border: 0;
+		padding: 0;
+		background: transparent;
+		color: inherit;
+		text-align: left;
+		text-transform: inherit;
+		letter-spacing: inherit;
 	}
 
 	.detail-grid,
@@ -591,7 +603,6 @@
 		}
 
 		.panel-header,
-		.header-controls,
 		.inline-actions {
 			flex-direction: column;
 			align-items: stretch;

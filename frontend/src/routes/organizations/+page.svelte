@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { resolve } from '$app/paths';
+	import PreviewLink from '$lib/components/PreviewLink.svelte';
 	import {
 		addOrganizationLocation,
 		addOrganizationTag,
@@ -13,14 +14,8 @@
 	} from '$lib/api';
 
 	const organizationTypes = ['Company', 'Fund', 'Supplier', 'School', 'Community', 'Partner', 'Nonprofit', 'Government', 'Other'];
-	const organizationSortOptions = [
-		{ value: 'name', label: 'Name' },
-		{ value: 'type', label: 'Type' },
-		{ value: 'industry', label: 'Industry' },
-		{ value: 'location', label: 'Location' }
-	] as const;
-
-	type OrganizationSortField = (typeof organizationSortOptions)[number]['value'];
+	type OrganizationSortField = 'name' | 'type' | 'industry' | 'location';
+	type SortDirection = 'none' | 'asc' | 'desc';
 
 	let loading = $state(true);
 	let saving = $state(false);
@@ -29,8 +24,8 @@
 	let error = $state('');
 	let query = $state('');
 	let industry = $state('');
-	let sortField = $state<OrganizationSortField>('name');
-	let sortDirection = $state<'asc' | 'desc'>('asc');
+	let sortField = $state<OrganizationSortField | null>(null);
+	let sortDirection = $state<SortDirection>('none');
 	let organizations = $state<Organization[]>([]);
 	let selectedId = $state('');
 	let selectedOrganizationDetail = $state<OrganizationDetail | null>(null);
@@ -71,9 +66,35 @@
 
 	onMount(loadOrganizations);
 
-	function sortOrganizations(items: Organization[], field: OrganizationSortField, direction: 'asc' | 'desc') {
+	function sortOrganizations(items: Organization[], field: OrganizationSortField | null, direction: SortDirection) {
+		if (!field || direction === 'none') {
+			return items;
+		}
 		const factor = direction === 'asc' ? 1 : -1;
 		return [...items].sort((left, right) => ((left[field] || '').localeCompare(right[field] || '')) * factor);
+	}
+
+	function toggleSort(field: OrganizationSortField) {
+		if (sortField !== field) {
+			sortField = field;
+			sortDirection = 'asc';
+			return;
+		}
+		if (sortDirection === 'none') {
+			sortDirection = 'asc';
+			return;
+		}
+		if (sortDirection === 'asc') {
+			sortDirection = 'desc';
+			return;
+		}
+		sortField = null;
+		sortDirection = 'none';
+	}
+
+	function sortIndicator(field: OrganizationSortField) {
+		if (sortField !== field || sortDirection === 'none') return '';
+		return sortDirection === 'asc' ? '↑' : '↓';
 	}
 
 	function syncSelectedEditForm(detail: OrganizationDetail) {
@@ -257,29 +278,12 @@
 					<h2>Directory</h2>
 					<span>{loading ? 'Loading…' : 'Live'}</span>
 				</div>
-				<div class="header-controls">
-					<label>
-						<span>Sort</span>
-						<select bind:value={sortField}>
-							{#each organizationSortOptions as option (option.value)}
-								<option value={option.value}>{option.label}</option>
-							{/each}
-						</select>
-					</label>
-					<label>
-						<span>Direction</span>
-						<select bind:value={sortDirection}>
-							<option value="asc">Asc</option>
-							<option value="desc">Desc</option>
-						</select>
-					</label>
-				</div>
 			</div>
 			<div class="table">
 				<div class="row head">
-					<span>Name</span>
-					<span>Type</span>
-					<span>Industry</span>
+					<button class="sort-button" type="button" onclick={() => toggleSort('name')}>Name {sortIndicator('name')}</button>
+					<button class="sort-button" type="button" onclick={() => toggleSort('type')}>Type {sortIndicator('type')}</button>
+					<button class="sort-button" type="button" onclick={() => toggleSort('industry')}>Industry {sortIndicator('industry')}</button>
 				</div>
 				{#each sortedOrganizations as organization (organization.id)}
 					<button
@@ -371,7 +375,13 @@
 						</div>
 						<div class="field wide">
 							<span>Website</span>
-							<p>{selectedOrganizationDetail.website || 'No website recorded.'}</p>
+							<p>
+								{#if selectedOrganizationDetail.website}
+									<PreviewLink value={selectedOrganizationDetail.website} />
+								{:else}
+									No website recorded.
+								{/if}
+							</p>
 						</div>
 						<div class="field wide">
 							<span>Description</span>
@@ -590,7 +600,6 @@
 		border-bottom: 1px solid var(--line);
 	}
 
-	.header-controls,
 	.inline-actions {
 		display: flex;
 		gap: 0.6rem;
@@ -621,6 +630,16 @@
 
 	.item.selected {
 		background: var(--selection-row-bg);
+	}
+
+	.sort-button {
+		border: 0;
+		padding: 0;
+		background: transparent;
+		color: inherit;
+		text-align: left;
+		text-transform: inherit;
+		letter-spacing: inherit;
 	}
 
 	.detail-grid,
@@ -693,7 +712,6 @@
 		}
 
 		.panel-header,
-		.header-controls,
 		.inline-actions {
 			flex-direction: column;
 			align-items: stretch;

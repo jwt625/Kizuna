@@ -17,14 +17,8 @@
 		'Intro',
 		'Other'
 	];
-	const sortOptions = [
-		{ value: 'started_at', label: 'When' },
-		{ value: 'title', label: 'Title' },
-		{ value: 'type', label: 'Type' },
-		{ value: 'duration_minutes', label: 'Duration' }
-	] as const;
-
-	type SortField = (typeof sortOptions)[number]['value'];
+	type SortField = 'started_at' | 'title' | 'type' | 'duration_minutes';
+	type SortDirection = 'none' | 'asc' | 'desc';
 	type ViewMode = 'list' | 'calendar';
 	type EventsByDay = Record<string, Event[]>;
 
@@ -37,8 +31,8 @@
 	let people = $state<Person[]>([]);
 	let selectedId = $state('');
 	let selectedEventDetail = $state<Event | null>(null);
-	let sortField = $state<SortField>('started_at');
-	let sortDirection = $state<'asc' | 'desc'>('desc');
+	let sortField = $state<SortField | null>(null);
+	let sortDirection = $state<SortDirection>('none');
 	let viewMode = $state<ViewMode>('list');
 	let monthCursor = $state(new Date().toISOString().slice(0, 7));
 
@@ -85,7 +79,10 @@
 		return new Date(`${monthKey}-01T00:00:00`);
 	}
 
-	function sortEvents(items: Event[], field: SortField, direction: 'asc' | 'desc') {
+	function sortEvents(items: Event[], field: SortField | null, direction: SortDirection) {
+		if (!field || direction === 'none') {
+			return items;
+		}
 		const factor = direction === 'asc' ? 1 : -1;
 		return [...items].sort((left, right) => {
 			if (field === 'started_at') {
@@ -96,6 +93,29 @@
 			}
 			return ((left[field] || '').localeCompare(right[field] || '')) * factor;
 		});
+	}
+
+	function toggleSort(field: SortField) {
+		if (sortField !== field) {
+			sortField = field;
+			sortDirection = 'asc';
+			return;
+		}
+		if (sortDirection === 'none') {
+			sortDirection = 'asc';
+			return;
+		}
+		if (sortDirection === 'asc') {
+			sortDirection = 'desc';
+			return;
+		}
+		sortField = null;
+		sortDirection = 'none';
+	}
+
+	function sortIndicator(field: SortField) {
+		if (sortField !== field || sortDirection === 'none') return '';
+		return sortDirection === 'asc' ? '↑' : '↓';
 	}
 
 	function buildCalendarDays(monthKey: string) {
@@ -292,32 +312,15 @@
 							<option value="calendar">Calendar</option>
 						</select>
 					</label>
-					{#if viewMode === 'list'}
-						<label>
-							<span>Sort</span>
-							<select bind:value={sortField}>
-								{#each sortOptions as option (option.value)}
-									<option value={option.value}>{option.label}</option>
-								{/each}
-							</select>
-						</label>
-					{/if}
-					<label>
-						<span>Direction</span>
-						<select bind:value={sortDirection}>
-							<option value="desc">Desc</option>
-							<option value="asc">Asc</option>
-						</select>
-					</label>
 				</div>
 			</div>
 
 			{#if viewMode === 'list'}
 				<div class="table">
 					<div class="row head">
-						<span>Event</span>
-						<span>Type</span>
-						<span>When</span>
+						<button class="sort-button" type="button" onclick={() => toggleSort('title')}>Event {sortIndicator('title')}</button>
+						<button class="sort-button" type="button" onclick={() => toggleSort('type')}>Type {sortIndicator('type')}</button>
+						<button class="sort-button" type="button" onclick={() => toggleSort('started_at')}>When {sortIndicator('started_at')}</button>
 					</div>
 					{#each sortedEvents as event (event.id)}
 						<button
@@ -630,6 +633,16 @@
 	.item.selected,
 	.calendar-chip.selected {
 		background: var(--selection-row-bg);
+	}
+
+	.sort-button {
+		border: 0;
+		padding: 0;
+		background: transparent;
+		color: inherit;
+		text-align: left;
+		text-transform: inherit;
+		letter-spacing: inherit;
 	}
 
 	.row strong,

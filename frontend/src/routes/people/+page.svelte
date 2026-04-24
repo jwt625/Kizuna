@@ -2,6 +2,7 @@
 	import { onMount } from 'svelte';
 	import { resolve } from '$app/paths';
 	import DateTimeField from '$lib/components/DateTimeField.svelte';
+	import PreviewLink from '$lib/components/PreviewLink.svelte';
 	import {
 		addPersonLocation,
 		addPersonOrganizationRole,
@@ -19,16 +20,11 @@
 		type Person,
 		type PersonDetail
 	} from '$lib/api';
+	import { normalizeExternalHref } from '$lib/utils/links';
 
 	const categoryOptions = ['All', 'New', 'Active', 'Warm', 'Watch'];
-	const personSortOptions = [
-		{ value: 'display_name', label: 'Name' },
-		{ value: 'relationship_category', label: 'Category' },
-		{ value: 'primary_location', label: 'Location' },
-		{ value: 'relationship_score', label: 'Score' }
-	] as const;
-
-	type PersonSortField = (typeof personSortOptions)[number]['value'];
+	type PersonSortField = 'display_name' | 'relationship_category' | 'primary_location' | 'relationship_score';
+	type SortDirection = 'none' | 'asc' | 'desc';
 
 	let loading = $state(true);
 	let saving = $state(false);
@@ -38,8 +34,8 @@
 	let query = $state('');
 	let category = $state('All');
 	let city = $state('');
-	let personSort = $state<PersonSortField>('display_name');
-	let personSortDirection = $state<'asc' | 'desc'>('asc');
+	let personSortField = $state<PersonSortField | null>(null);
+	let personSortDirection = $state<SortDirection>('none');
 	let people = $state<Person[]>([]);
 	let organizations = $state<Organization[]>([]);
 	let selectedId = $state('');
@@ -91,7 +87,7 @@
 	let locationForm = $state({ city: '', region: '', country: '' });
 	let roleForm = $state({ organization_id: '', title: '', role_type: '' });
 
-	const sortedPeople = $derived(sortPeople(people, personSort, personSortDirection));
+	const sortedPeople = $derived(sortPeople(people, personSortField, personSortDirection));
 	const selectedPerson = $derived(sortedPeople.find((person) => person.id === selectedId) ?? sortedPeople[0] ?? null);
 
 	$effect(() => {
@@ -104,12 +100,15 @@
 		await Promise.all([loadPeople(), loadOrganizations()]);
 	});
 
-	function compareText(left: string | null | undefined, right: string | null | undefined, direction: 'asc' | 'desc') {
+	function compareText(left: string | null | undefined, right: string | null | undefined, direction: Exclude<SortDirection, 'none'>) {
 		const factor = direction === 'asc' ? 1 : -1;
 		return (left || '').localeCompare(right || '') * factor;
 	}
 
-	function sortPeople(items: Person[], field: PersonSortField, direction: 'asc' | 'desc') {
+	function sortPeople(items: Person[], field: PersonSortField | null, direction: SortDirection) {
+		if (!field || direction === 'none') {
+			return items;
+		}
 		return [...items].sort((left, right) => {
 			if (field === 'relationship_score') {
 				const factor = direction === 'asc' ? 1 : -1;
@@ -117,6 +116,29 @@
 			}
 			return compareText(`${left[field] ?? ''}`, `${right[field] ?? ''}`, direction);
 		});
+	}
+
+	function toggleSort(field: PersonSortField) {
+		if (personSortField !== field) {
+			personSortField = field;
+			personSortDirection = 'asc';
+			return;
+		}
+		if (personSortDirection === 'none') {
+			personSortDirection = 'asc';
+			return;
+		}
+		if (personSortDirection === 'asc') {
+			personSortDirection = 'desc';
+			return;
+		}
+		personSortField = null;
+		personSortDirection = 'none';
+	}
+
+	function sortIndicator(field: PersonSortField) {
+		if (personSortField !== field || personSortDirection === 'none') return '';
+		return personSortDirection === 'asc' ? '↑' : '↓';
 	}
 
 	function syncSelectedEditForm(detail: PersonDetail) {
@@ -142,7 +164,7 @@
 				city: city || undefined,
 				limit: 100
 			});
-			const available = sortPeople(people, personSort, personSortDirection);
+			const available = sortPeople(people, personSortField, personSortDirection);
 			if (!selectedId && available[0]) {
 				selectedId = available[0].id;
 			}
@@ -399,6 +421,13 @@
 			day: 'numeric'
 		});
 	}
+
+	function contactHref(type: string, value: string) {
+		if (type === 'Email') return normalizeExternalHref(value);
+		if (type === 'Phone' || type === 'WhatsApp' || type === 'Telegram') return normalizeExternalHref(value);
+		if (['Website', 'LinkedIn', 'X', 'GitHub'].includes(type)) return normalizeExternalHref(value);
+		return null;
+	}
 </script>
 
 <svelte:head>
@@ -445,29 +474,12 @@
 					<h2>Directory</h2>
 					<span>{loading ? 'Loading…' : 'Live'}</span>
 				</div>
-				<div class="header-controls">
-					<label>
-						<span>Sort</span>
-						<select bind:value={personSort}>
-							{#each personSortOptions as option (option.value)}
-								<option value={option.value}>{option.label}</option>
-							{/each}
-						</select>
-					</label>
-					<label>
-						<span>Direction</span>
-						<select bind:value={personSortDirection}>
-							<option value="asc">Asc</option>
-							<option value="desc">Desc</option>
-						</select>
-					</label>
-				</div>
 			</div>
 			<div class="table">
 				<div class="row head">
-					<span>Name</span>
-					<span>Category</span>
-					<span>Location</span>
+					<button class="sort-button" type="button" onclick={() => toggleSort('display_name')}>Name {sortIndicator('display_name')}</button>
+					<button class="sort-button" type="button" onclick={() => toggleSort('relationship_category')}>Category {sortIndicator('relationship_category')}</button>
+					<button class="sort-button" type="button" onclick={() => toggleSort('primary_location')}>Location {sortIndicator('primary_location')}</button>
 				</div>
 				{#each sortedPeople as person (person.id)}
 					<button
@@ -579,7 +591,14 @@
 							<ul>
 								{#if selectedPersonDetail.contact_methods.length}
 									{#each selectedPersonDetail.contact_methods as method (method.id)}
-										<li>{method.type}: {method.value}</li>
+										<li>
+											{method.type}:
+											{#if contactHref(method.type, method.value)}
+												<PreviewLink label={method.value} value={contactHref(method.type, method.value) || method.value} />
+											{:else}
+												{method.value}
+											{/if}
+										</li>
 									{/each}
 								{:else}
 									<li>No contact methods</li>
@@ -591,7 +610,7 @@
 							<ul>
 								{#if selectedPersonDetail.external_profiles.length}
 									{#each selectedPersonDetail.external_profiles as profile (profile.id)}
-										<li>{profile.platform}: {profile.url_or_handle}</li>
+										<li>{profile.platform}: <PreviewLink label={profile.url_or_handle} value={profile.url_or_handle} /></li>
 									{/each}
 								{:else}
 									<li>No external profiles</li>
@@ -970,11 +989,6 @@
 		color: var(--muted);
 	}
 
-	.header-controls {
-		display: flex;
-		gap: 0.65rem;
-	}
-
 	label {
 		display: grid;
 		gap: 0.35rem;
@@ -1015,6 +1029,16 @@
 		letter-spacing: 0.12em;
 		text-transform: uppercase;
 		color: var(--muted);
+	}
+
+	.sort-button {
+		border: 0;
+		padding: 0;
+		background: transparent;
+		color: inherit;
+		text-align: left;
+		text-transform: inherit;
+		letter-spacing: inherit;
 	}
 
 	.item {
@@ -1101,8 +1125,7 @@
 			grid-template-columns: 1fr;
 		}
 
-		.panel-header,
-		.header-controls {
+		.panel-header {
 			flex-direction: column;
 			align-items: stretch;
 		}

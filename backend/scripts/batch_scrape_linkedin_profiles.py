@@ -180,6 +180,33 @@ def select_targets_for_limit(ordered_targets: list[ProfileTarget], limit: int | 
     return ordered_targets[:limit]
 
 
+def select_runnable_targets(
+    ordered_targets: list[ProfileTarget],
+    latest_attempts: dict[str, dict[str, object]],
+    *,
+    limit: int | None,
+    retry_errors: bool,
+) -> list[ProfileTarget]:
+    completed_urls = {
+        profile_url
+        for profile_url, attempt in latest_attempts.items()
+        if attempt.get("status") == "success"
+    }
+    error_urls = {
+        profile_url
+        for profile_url, attempt in latest_attempts.items()
+        if attempt.get("status") == "error"
+    }
+
+    runnable_targets = [target for target in ordered_targets if target.profile_url not in completed_urls]
+    if not retry_errors:
+        runnable_targets = [target for target in runnable_targets if target.profile_url not in error_urls]
+
+    if limit is None:
+        return runnable_targets
+    return runnable_targets[:limit]
+
+
 def build_progress_snapshot(
     *,
     selected_targets: list[ProfileTarget],
@@ -200,11 +227,7 @@ def build_progress_snapshot(
         for profile_url, attempt in latest_attempts.items()
         if attempt.get("status") == "error"
     }
-    pending_targets = [
-        target for target in selected_targets if target.profile_url not in completed_urls and target.profile_url not in error_urls
-    ]
-    if args.retry_errors:
-        pending_targets = [target for target in selected_targets if target.profile_url not in completed_urls]
+    pending_targets = selected_targets
     return {
         "started_at": started_at,
         "updated_at": utc_now_iso(),
@@ -222,7 +245,7 @@ def build_progress_snapshot(
         "retry_errors": args.retry_errors,
         "dry_run": args.dry_run,
         "headless": args.headless,
-        "total_targets": len(selected_targets),
+        "selected_target_count": len(selected_targets),
         "global_target_pool_count": len(all_targets),
         "ordered_target_pool_count": len(ordered_targets),
         "completed_count": len(completed_urls),
@@ -350,7 +373,12 @@ def main() -> None:
         latest_attempts=latest_attempts,
         order_path=args.target_order_json,
     )
-    selected_targets = select_targets_for_limit(ordered_targets, args.limit)
+    selected_targets = select_runnable_targets(
+        ordered_targets,
+        latest_attempts,
+        limit=args.limit,
+        retry_errors=args.retry_errors,
+    )
     started_at = utc_now_iso()
     interrupted = False
 
@@ -369,20 +397,7 @@ def main() -> None:
         print(json.dumps(progress_snapshot, ensure_ascii=False, indent=2))
         return
 
-    completed_urls = {
-        profile_url
-        for profile_url, attempt in latest_attempts.items()
-        if attempt.get("status") == "success"
-    }
-    error_urls = {
-        profile_url
-        for profile_url, attempt in latest_attempts.items()
-        if attempt.get("status") == "error"
-    }
-
-    pending_targets = [target for target in selected_targets if target.profile_url not in completed_urls]
-    if not args.retry_errors:
-        pending_targets = [target for target in pending_targets if target.profile_url not in error_urls]
+    pending_targets = selected_targets
 
     driver = None
     processed_since_restart = 0

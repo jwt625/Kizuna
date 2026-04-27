@@ -1,8 +1,22 @@
 <script lang="ts">
+	import { goto } from '$app/navigation';
 	import { onMount } from 'svelte';
 	import { resolve } from '$app/paths';
+	import { page } from '$app/state';
 	import DateTimeField from '$lib/components/DateTimeField.svelte';
-	import { createEvent, getEvent, listEvents, listPeople, updateEvent, type Event, type Person } from '$lib/api';
+	import {
+		createEvent,
+		getEvent,
+		listEvents,
+		listLocations,
+		listOrganizations,
+		listPeople,
+		updateEvent,
+		type Event,
+		type Location,
+		type Organization,
+		type Person
+	} from '$lib/api';
 
 	const eventTypes = [
 		'Meeting',
@@ -29,6 +43,8 @@
 	let error = $state('');
 	let events = $state<Event[]>([]);
 	let people = $state<Person[]>([]);
+	let organizations = $state<Organization[]>([]);
+	let locations = $state<Location[]>([]);
 	let selectedId = $state('');
 	let selectedEventDetail = $state<Event | null>(null);
 	let sortField = $state<SortField | null>(null);
@@ -40,26 +56,45 @@
 		title: '',
 		type: 'Meeting',
 		started_at: '',
+		ended_at: '',
 		duration_minutes: 30,
 		context: '',
 		summary: '',
-		selected_person_ids: [] as string[]
+		notes: '',
+		sentiment: '',
+		selected_person_ids: [] as string[],
+		selected_organization_ids: [] as string[],
+		selected_location_ids: [] as string[]
 	});
 
 	let form = $state({
 		title: '',
 		type: 'Meeting',
 		started_at: '',
+		ended_at: '',
 		duration_minutes: 30,
 		context: '',
 		summary: '',
-		selected_person_ids: [] as string[]
+		notes: '',
+		sentiment: '',
+		selected_person_ids: [] as string[],
+		selected_organization_ids: [] as string[],
+		selected_location_ids: [] as string[]
 	});
 
+	const requestedEventId = $derived(page.url.searchParams.get('id') ?? '');
 	const sortedEvents = $derived(sortEvents(events, sortField, sortDirection));
 	const selectedEvent = $derived(sortedEvents.find((event) => event.id === selectedId) ?? sortedEvents[0] ?? null);
 	const calendarDays = $derived(buildCalendarDays(monthCursor));
 	const eventsByDay = $derived(groupEventsByDay(events));
+
+	$effect(() => {
+		const nextId = requestedEventId;
+		if (nextId && nextId !== selectedId) {
+			selectedId = nextId;
+			editingSelected = false;
+		}
+	});
 
 	$effect(() => {
 		if (selectedId) {
@@ -68,7 +103,7 @@
 	});
 
 	onMount(async () => {
-		await Promise.all([loadEvents(), loadPeople()]);
+		await Promise.all([loadEvents(), loadPeople(), loadOrganizations(), loadLocations()]);
 	});
 
 	function toDayKey(value: string) {
@@ -141,11 +176,36 @@
 			title: event.title,
 			type: event.type,
 			started_at: event.started_at.slice(0, 16),
+			ended_at: event.ended_at ? event.ended_at.slice(0, 16) : '',
 			duration_minutes: event.duration_minutes || 30,
 			context: event.context || '',
 			summary: event.summary || '',
-			selected_person_ids: [...event.person_ids]
+			notes: event.notes || '',
+			sentiment: event.sentiment || '',
+			selected_person_ids: [...event.person_ids],
+			selected_organization_ids: [...event.organization_ids],
+			selected_location_ids: [...event.location_ids]
 		};
+	}
+
+	async function syncSelectedEventInUrl(eventId: string) {
+		const currentUrl = new URL(page.url);
+		if (currentUrl.searchParams.get('id') === eventId) {
+			return;
+		}
+		currentUrl.searchParams.set('id', eventId);
+		await goto(currentUrl.pathname + currentUrl.search, {
+			replaceState: true,
+			noScroll: true,
+			keepFocus: true,
+			invalidateAll: false
+		});
+	}
+
+	async function selectEvent(eventId: string) {
+		selectedId = eventId;
+		editingSelected = false;
+		await syncSelectedEventInUrl(eventId);
 	}
 
 	async function loadEvents() {
@@ -154,10 +214,11 @@
 		try {
 			events = await listEvents({ limit: 100 });
 			const available = sortEvents(events, sortField, sortDirection);
-			if (!selectedId && available[0]) {
+			if (requestedEventId && available.some((event) => event.id === requestedEventId)) {
+				selectedId = requestedEventId;
+			} else if (!selectedId && available[0]) {
 				selectedId = available[0].id;
-			}
-			if (selectedId && !available.some((event) => event.id === selectedId) && available[0]) {
+			} else if (selectedId && !available.some((event) => event.id === selectedId) && available[0]) {
 				selectedId = available[0].id;
 			}
 		} catch (err) {
@@ -175,6 +236,22 @@
 			}
 		} catch (err) {
 			error = err instanceof Error ? err.message : 'Failed to load people.';
+		}
+	}
+
+	async function loadOrganizations() {
+		try {
+			organizations = await listOrganizations({ limit: 100 });
+		} catch (err) {
+			error = err instanceof Error ? err.message : 'Failed to load organizations.';
+		}
+	}
+
+	async function loadLocations() {
+		try {
+			locations = await listLocations({ limit: 150 });
+		} catch (err) {
+			error = err instanceof Error ? err.message : 'Failed to load locations.';
 		}
 	}
 
@@ -211,10 +288,15 @@
 				title: selectedEditForm.title,
 				type: selectedEditForm.type,
 				started_at: new Date(selectedEditForm.started_at).toISOString(),
+				ended_at: selectedEditForm.ended_at ? new Date(selectedEditForm.ended_at).toISOString() : null,
 				duration_minutes: Number(selectedEditForm.duration_minutes) || null,
 				context: selectedEditForm.context || null,
 				summary: selectedEditForm.summary || null,
-				person_ids: selectedEditForm.selected_person_ids
+				notes: selectedEditForm.notes || null,
+				sentiment: selectedEditForm.sentiment || null,
+				person_ids: selectedEditForm.selected_person_ids,
+				organization_ids: selectedEditForm.selected_organization_ids,
+				location_ids: selectedEditForm.selected_location_ids
 			});
 			editingSelected = false;
 			await loadEvents();
@@ -229,25 +311,36 @@
 		saving = true;
 		error = '';
 		try {
-			await createEvent({
+			const created = await createEvent({
 				title: form.title,
 				type: form.type,
 				started_at: new Date(form.started_at).toISOString(),
+				ended_at: form.ended_at ? new Date(form.ended_at).toISOString() : undefined,
 				duration_minutes: Number(form.duration_minutes) || undefined,
 				context: form.context || undefined,
 				summary: form.summary || undefined,
-				person_ids: form.selected_person_ids
+				notes: form.notes || undefined,
+				sentiment: form.sentiment || undefined,
+				person_ids: form.selected_person_ids,
+				organization_ids: form.selected_organization_ids,
+				location_ids: form.selected_location_ids
 			});
 			form = {
 				title: '',
 				type: 'Meeting',
 				started_at: '',
+				ended_at: '',
 				duration_minutes: 30,
 				context: '',
 				summary: '',
-				selected_person_ids: people[0] ? [people[0].id] : []
+				notes: '',
+				sentiment: '',
+				selected_person_ids: people[0] ? [people[0].id] : [],
+				selected_organization_ids: [],
+				selected_location_ids: []
 			};
 			await loadEvents();
+			await selectEvent(created.id);
 		} catch (err) {
 			error = err instanceof Error ? err.message : 'Failed to create event.';
 		} finally {
@@ -324,13 +417,12 @@
 					</div>
 					{#each sortedEvents as event (event.id)}
 						<button
-							class:selected={selectedEvent?.id === event.id}
-							class="row item"
-							onclick={() => {
-								selectedId = event.id;
-								editingSelected = false;
-							}}
-						>
+						class:selected={selectedEvent?.id === event.id}
+						class="row item"
+						onclick={() => {
+							void selectEvent(event.id);
+						}}
+					>
 							<span>
 								<strong>{event.title}</strong>
 								<small>{event.summary || event.context || 'No summary'}</small>
@@ -355,7 +447,9 @@
 							<div class="calendar-day">{day.getDate()}</div>
 							<div class="calendar-events">
 								{#each eventsByDay[day.toISOString().slice(0, 10)] || [] as event (event.id)}
-									<button class:selected={selectedEvent?.id === event.id} class="calendar-chip" type="button" onclick={() => (selectedId = event.id)}>
+									<button class:selected={selectedEvent?.id === event.id} class="calendar-chip" type="button" onclick={() => {
+										void selectEvent(event.id);
+									}}>
 										{event.title}
 									</button>
 								{/each}
@@ -407,11 +501,30 @@
 						<div class="wide">
 							<DateTimeField bind:value={selectedEditForm.started_at} label="Started at" />
 						</div>
+						<div class="wide">
+							<DateTimeField bind:value={selectedEditForm.ended_at} label="Ended at" />
+						</div>
 						<label class="wide">
 							<span>People</span>
 							<select bind:value={selectedEditForm.selected_person_ids} multiple size="6">
 								{#each people as person (person.id)}
 									<option value={person.id}>{person.display_name}</option>
+								{/each}
+							</select>
+						</label>
+						<label class="wide">
+							<span>Organizations</span>
+							<select bind:value={selectedEditForm.selected_organization_ids} multiple size="5">
+								{#each organizations as organization (organization.id)}
+									<option value={organization.id}>{organization.name}</option>
+								{/each}
+							</select>
+						</label>
+						<label class="wide">
+							<span>Locations</span>
+							<select bind:value={selectedEditForm.selected_location_ids} multiple size="5">
+								{#each locations as location (location.id)}
+									<option value={location.id}>{location.label || location.address_line || location.city || 'Untitled location'}</option>
 								{/each}
 							</select>
 						</label>
@@ -422,6 +535,14 @@
 						<label class="wide">
 							<span>Summary</span>
 							<textarea bind:value={selectedEditForm.summary} rows="5"></textarea>
+						</label>
+						<label class="wide">
+							<span>Notes</span>
+							<textarea bind:value={selectedEditForm.notes} rows="4"></textarea>
+						</label>
+						<label>
+							<span>Sentiment</span>
+							<input bind:value={selectedEditForm.sentiment} />
 						</label>
 					{:else}
 						<div class="field">
@@ -437,6 +558,10 @@
 							<strong>{formatDateTime(selectedEventDetail.started_at)}</strong>
 						</div>
 						<div class="field">
+							<span>Ended</span>
+							<strong>{selectedEventDetail.ended_at ? formatDateTime(selectedEventDetail.ended_at) : '—'}</strong>
+						</div>
+						<div class="field">
 							<span>Duration</span>
 							<strong>{selectedEventDetail.duration_minutes || '—'} min</strong>
 						</div>
@@ -449,6 +574,14 @@
 							<p>{selectedEventDetail.summary || 'No summary recorded.'}</p>
 						</div>
 						<div class="field wide">
+							<span>Notes</span>
+							<p>{selectedEventDetail.notes || 'No notes recorded.'}</p>
+						</div>
+						<div class="field">
+							<span>Sentiment</span>
+							<strong>{selectedEventDetail.sentiment || '—'}</strong>
+						</div>
+						<div class="field wide">
 							<span>People</span>
 							<ul>
 								{#if selectedEventDetail.person_ids.length}
@@ -457,6 +590,30 @@
 									{/each}
 								{:else}
 									<li>No people linked yet.</li>
+								{/if}
+							</ul>
+						</div>
+						<div class="field wide">
+							<span>Organizations</span>
+							<ul>
+								{#if selectedEventDetail.organization_ids.length}
+									{#each selectedEventDetail.organization_ids as organizationId (organizationId)}
+										<li><a href={resolve(`/organizations?id=${organizationId}`)}>{organizations.find((organization) => organization.id === organizationId)?.name || organizationId}</a></li>
+									{/each}
+								{:else}
+									<li>No organizations linked yet.</li>
+								{/if}
+							</ul>
+						</div>
+						<div class="field wide">
+							<span>Locations</span>
+							<ul>
+								{#if selectedEventDetail.location_ids.length}
+									{#each selectedEventDetail.location_ids as locationId (locationId)}
+										<li><a href={resolve(`/locations?id=${locationId}`)}>{locations.find((location) => location.id === locationId)?.label || locations.find((location) => location.id === locationId)?.address_line || locations.find((location) => location.id === locationId)?.city || locationId}</a></li>
+									{/each}
+								{:else}
+									<li>No locations linked yet.</li>
 								{/if}
 							</ul>
 						</div>
@@ -499,11 +656,30 @@
 					<div class="wide">
 						<DateTimeField bind:value={form.started_at} label="Started at" required />
 					</div>
+					<div class="wide">
+						<DateTimeField bind:value={form.ended_at} label="Ended at" />
+					</div>
 					<label class="wide">
 						<span>People</span>
 						<select bind:value={form.selected_person_ids} multiple size="6">
 							{#each people as person (person.id)}
 								<option value={person.id}>{person.display_name}</option>
+							{/each}
+						</select>
+					</label>
+					<label class="wide">
+						<span>Organizations</span>
+						<select bind:value={form.selected_organization_ids} multiple size="5">
+							{#each organizations as organization (organization.id)}
+								<option value={organization.id}>{organization.name}</option>
+							{/each}
+						</select>
+					</label>
+					<label class="wide">
+						<span>Locations</span>
+						<select bind:value={form.selected_location_ids} multiple size="5">
+							{#each locations as location (location.id)}
+								<option value={location.id}>{location.label || location.address_line || location.city || 'Untitled location'}</option>
 							{/each}
 						</select>
 					</label>
@@ -514,6 +690,14 @@
 					<label class="wide">
 						<span>Summary</span>
 						<textarea bind:value={form.summary} rows="5"></textarea>
+					</label>
+					<label class="wide">
+						<span>Notes</span>
+						<textarea bind:value={form.notes} rows="4"></textarea>
+					</label>
+					<label>
+						<span>Sentiment</span>
+						<input bind:value={form.sentiment} placeholder="Positive, neutral, tense" />
 					</label>
 					<button type="submit" disabled={saving}>{saving ? 'Saving…' : 'Create event'}</button>
 				</form>

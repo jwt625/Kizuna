@@ -38,6 +38,30 @@ from app.services.relationship_scoring import relationship_reason_for_person
 router = APIRouter(prefix="/people", tags=["people"])
 
 
+def resolve_existing_location(db: DbSession, payload: EntityLocationCreate) -> Location | None:
+    if payload.location is None:
+        return None
+    location_data = payload.location.model_dump()
+    conditions = [getattr(Location, field).is_(None) if value is None else getattr(Location, field) == value for field, value in location_data.items()]
+    return db.scalar(select(Location).where(*conditions))
+
+
+def resolve_location_for_link(db: DbSession, payload: EntityLocationCreate) -> Location:
+    if payload.location_id is not None:
+        location = db.get(Location, payload.location_id)
+        if not location:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Location not found")
+        return location
+    location = resolve_existing_location(db, payload)
+    if location:
+        return location
+    assert payload.location is not None
+    location = Location(**payload.location.model_dump())
+    db.add(location)
+    db.flush()
+    return location
+
+
 def person_detail_statement() -> Select[tuple[Person]]:
     return (
         select(Person)
@@ -323,18 +347,32 @@ def add_person_location(person_id: UUID, payload: EntityLocationCreate, db: DbSe
     person = cast(Person | None, db.scalar(person_detail_statement().where(Person.id == person_id)))
     if not person:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Person not found")
-    location = Location(**payload.location.model_dump())
-    db.add(location)
-    db.flush()
-    db.add(
-        EntityLocation(
-            entity_type="Person",
-            entity_id=person_id,
-            location_id=location.id,
-            is_primary=payload.is_primary,
-            notes=payload.notes,
+    location = resolve_location_for_link(db, payload)
+    if payload.is_primary:
+        for existing_link in db.scalars(
+            select(EntityLocation).where(EntityLocation.entity_type == "Person", EntityLocation.entity_id == person_id)
+        ):
+            existing_link.is_primary = existing_link.location_id == location.id
+    entity_location = db.scalar(
+        select(EntityLocation).where(
+            EntityLocation.entity_type == "Person",
+            EntityLocation.entity_id == person_id,
+            EntityLocation.location_id == location.id,
         )
     )
+    if entity_location:
+        entity_location.is_primary = payload.is_primary or entity_location.is_primary
+        entity_location.notes = payload.notes
+    else:
+        db.add(
+            EntityLocation(
+                entity_type="Person",
+                entity_id=person_id,
+                location_id=location.id,
+                is_primary=payload.is_primary,
+                notes=payload.notes,
+            )
+        )
     if payload.is_primary:
         parts = [location.city, location.region, location.country]
         person.primary_location = ", ".join(part for part in parts if part) or location.label

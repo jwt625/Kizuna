@@ -1,6 +1,8 @@
 <script lang="ts">
+	import { goto } from '$app/navigation';
 	import { onMount } from 'svelte';
 	import { resolve } from '$app/paths';
+	import { page } from '$app/state';
 	import DateTimeField from '$lib/components/DateTimeField.svelte';
 	import PreviewLink from '$lib/components/PreviewLink.svelte';
 	import {
@@ -9,13 +11,16 @@
 		addPersonTag,
 		completeReminder,
 		createEvent,
+		createLocation,
 		createPerson,
 		createReminder,
 		getPerson,
+		listLocations,
 		listOrganizations,
 		listPeople,
 		snoozeReminder,
 		updatePerson,
+		type Location,
 		type Organization,
 		type Person,
 		type PersonDetail
@@ -51,6 +56,7 @@
 	let people = $state<Person[]>([]);
 	let peopleOffset = $state(0);
 	let organizations = $state<Organization[]>([]);
+	let locations = $state<Location[]>([]);
 	let selectedId = $state('');
 	let selectedPersonDetail = $state<PersonDetail | null>(null);
 	let directoryViewport: HTMLDivElement | null = null;
@@ -61,7 +67,8 @@
 		display_name: '',
 		given_name: '',
 		family_name: '',
-		primary_location: '',
+		selected_location_id: '',
+		location_search: '',
 		first_met_date: '',
 		relationship_summary: '',
 		how_we_met: '',
@@ -75,14 +82,22 @@
 		display_name: '',
 		given_name: '',
 		family_name: '',
-		primary_location: '',
+		nickname: '',
+		pronouns: '',
+		short_bio: '',
+		first_met_date: '',
+		selected_location_id: '',
+		location_search: '',
 		relationship_summary: '',
 		how_we_met: '',
 		contact_type: 'Email',
 		contact_value: '',
 		contact_label: '',
+		contact_notes: '',
 		profile_platform: 'LinkedIn',
 		profile_url: '',
+		profile_label: '',
+		profile_notes: '',
 		notes: ''
 	});
 
@@ -90,9 +105,12 @@
 		title: '',
 		type: 'One-on-one',
 		started_at: '',
+		ended_at: '',
 		duration_minutes: 45,
 		context: '',
-		summary: ''
+		summary: '',
+		notes: '',
+		sentiment: ''
 	});
 
 	let reminderForm = $state({
@@ -103,11 +121,43 @@
 	});
 
 	let tagForm = $state({ name: '' });
-	let locationForm = $state({ city: '', region: '', country: '' });
-	let roleForm = $state({ organization_id: '', title: '', role_type: '' });
+	let locationForm = $state({
+		location_search: '',
+		selected_location_id: '',
+		link_notes: '',
+		is_primary: true
+	});
+	let showCreateLocationModal = $state(false);
+	let locationCreateForm = $state({
+		label: '',
+		address_line: '',
+		city: '',
+		region: '',
+		country: '',
+		location_type: 'Home',
+		notes: ''
+	});
+	let roleForm = $state({
+		organization_id: '',
+		title: '',
+		role_type: '',
+		start_date: '',
+		end_date: '',
+		is_current: true,
+		notes: ''
+	});
 
+	const requestedPersonId = $derived(page.url.searchParams.get('id') ?? '');
 	const sortedPeople = $derived(sortPeople(people, personSortField, personSortDirection));
 	const selectedPerson = $derived(sortedPeople.find((person) => person.id === selectedId) ?? sortedPeople[0] ?? null);
+
+	$effect(() => {
+		const nextId = requestedPersonId;
+		if (nextId && nextId !== selectedId) {
+			selectedId = nextId;
+			editingSelected = false;
+		}
+	});
 
 	$effect(() => {
 		if (selectedId) {
@@ -116,7 +166,7 @@
 	});
 
 	onMount(async () => {
-		await Promise.all([loadPeople(), loadOrganizations()]);
+		await Promise.all([loadPeople(), loadOrganizations(), loadLocations()]);
 		hasLoadedInitialPeople = true;
 	});
 
@@ -182,11 +232,13 @@
 
 	function syncSelectedEditForm(detail: PersonDetail) {
 		const primaryProfile = detail.external_profiles[0] ?? null;
+		const primaryStructuredLocation = detail.locations.find((item) => item.is_primary)?.location ?? detail.locations[0]?.location ?? null;
 		selectedEditForm = {
 			display_name: detail.display_name || '',
 			given_name: detail.given_name || '',
 			family_name: detail.family_name || '',
-			primary_location: detail.primary_location || '',
+			selected_location_id: primaryStructuredLocation?.id || '',
+			location_search: primaryStructuredLocation ? locationOptionLabel(primaryStructuredLocation) : detail.primary_location || '',
 			first_met_date: detail.first_met_date || '',
 			relationship_summary: detail.relationship_summary || '',
 			how_we_met: detail.how_we_met || '',
@@ -215,6 +267,35 @@
 			is_primary: false,
 			notes: null
 		};
+	}
+
+	function locationSummary(location: Location | null | undefined) {
+		if (!location) return '';
+		return [location.city, location.region, location.country].filter(Boolean).join(', ') || location.label || location.address_line || '';
+	}
+
+	function selectedLocationById(locationId: string) {
+		return locations.find((location) => location.id === locationId) ?? null;
+	}
+
+	async function syncSelectedPersonInUrl(personId: string) {
+		const currentUrl = new URL(page.url);
+		if (currentUrl.searchParams.get('id') === personId) {
+			return;
+		}
+		currentUrl.searchParams.set('id', personId);
+		await goto(currentUrl.pathname + currentUrl.search, {
+			replaceState: true,
+			noScroll: true,
+			keepFocus: true,
+			invalidateAll: false
+		});
+	}
+
+	async function selectPerson(personId: string) {
+		selectedId = personId;
+		editingSelected = false;
+		await syncSelectedPersonInUrl(personId);
 	}
 
 	function addEditableContactMethod() {
@@ -291,10 +372,11 @@
 	}
 
 	function syncSelectedPersonFromAvailable(available: Person[]) {
-		if (!selectedId && available[0]) {
+		if (requestedPersonId && available.some((person) => person.id === requestedPersonId)) {
+			selectedId = requestedPersonId;
+		} else if (!selectedId && available[0]) {
 			selectedId = available[0].id;
-		}
-		if (selectedId && !available.some((person) => person.id === selectedId) && available[0]) {
+		} else if (selectedId && !available.some((person) => person.id === selectedId) && available[0]) {
 			selectedId = available[0].id;
 		}
 	}
@@ -364,6 +446,17 @@
 		}
 	}
 
+	async function loadLocations() {
+		try {
+			locations = await listLocations({ limit: 200 });
+			if (!locationForm.selected_location_id && locations[0]) {
+				locationForm.selected_location_id = locations[0].id;
+			}
+		} catch (err) {
+			error = err instanceof Error ? err.message : 'Failed to load locations.';
+		}
+	}
+
 	async function loadSelectedPerson(personId: string) {
 		try {
 			selectedPersonDetail = await getPerson(personId);
@@ -393,11 +486,12 @@
 		savingSelection = true;
 		error = '';
 		try {
+			const selectedLocation = selectedLocationById(selectedEditForm.selected_location_id);
 			selectedPersonDetail = await updatePerson(selectedId, {
 				display_name: selectedEditForm.display_name,
 				given_name: selectedEditForm.given_name || null,
 				family_name: selectedEditForm.family_name || null,
-				primary_location: selectedEditForm.primary_location || null,
+				primary_location: locationSummary(selectedLocation) || null,
 				first_met_date: selectedEditForm.first_met_date || null,
 				relationship_summary: selectedEditForm.relationship_summary || null,
 				how_we_met: selectedEditForm.how_we_met || null,
@@ -405,6 +499,12 @@
 				external_profiles: buildUpdatedExternalProfiles(selectedPersonDetail),
 				notes: selectedEditForm.notes || null
 			});
+			if (selectedLocation) {
+				selectedPersonDetail = await addPersonLocation(selectedId, {
+					location_id: selectedLocation.id,
+					is_primary: true
+				});
+			}
 			editingSelected = false;
 			await loadPeople();
 		} catch (err) {
@@ -418,11 +518,16 @@
 		saving = true;
 		error = '';
 		try {
+			const selectedLocation = selectedLocationById(form.selected_location_id);
 			const created = await createPerson({
 				display_name: form.display_name,
 				given_name: form.given_name || undefined,
 				family_name: form.family_name || undefined,
-				primary_location: form.primary_location || undefined,
+				nickname: form.nickname || undefined,
+				pronouns: form.pronouns || undefined,
+				short_bio: form.short_bio || undefined,
+				first_met_date: form.first_met_date || undefined,
+				primary_location: locationSummary(selectedLocation) || undefined,
 				relationship_summary: form.relationship_summary || undefined,
 				how_we_met: form.how_we_met || undefined,
 				notes: form.notes || undefined,
@@ -432,7 +537,8 @@
 								type: form.contact_type,
 								value: form.contact_value,
 								label: form.contact_label || undefined,
-								is_primary: true
+								is_primary: true,
+								notes: form.contact_notes || undefined
 							}
 						]
 					: [],
@@ -440,27 +546,43 @@
 					? [
 							{
 								platform: form.profile_platform,
-								url_or_handle: form.profile_url
+								url_or_handle: form.profile_url,
+								label: form.profile_label || undefined,
+								notes: form.profile_notes || undefined
 							}
 						]
 					: []
 			});
+			if (selectedLocation) {
+				await addPersonLocation(created.id, {
+					location_id: selectedLocation.id,
+					is_primary: true
+				});
+			}
 			form = {
 				display_name: '',
 				given_name: '',
 				family_name: '',
-				primary_location: '',
+				nickname: '',
+				pronouns: '',
+				short_bio: '',
+				first_met_date: '',
+				selected_location_id: '',
+				location_search: '',
 				relationship_summary: '',
 				how_we_met: '',
 				contact_type: 'Email',
 				contact_value: '',
 				contact_label: '',
+				contact_notes: '',
 				profile_platform: 'LinkedIn',
 				profile_url: '',
+				profile_label: '',
+				profile_notes: '',
 				notes: ''
 			};
 			await loadPeople();
-			selectedId = created.id;
+			await selectPerson(created.id);
 		} catch (err) {
 			error = err instanceof Error ? err.message : 'Failed to create person.';
 		} finally {
@@ -475,18 +597,24 @@
 				title: eventForm.title,
 				type: eventForm.type,
 				started_at: new Date(eventForm.started_at).toISOString(),
+				ended_at: eventForm.ended_at ? new Date(eventForm.ended_at).toISOString() : undefined,
 				duration_minutes: Number(eventForm.duration_minutes) || undefined,
 				context: eventForm.context || undefined,
 				summary: eventForm.summary || undefined,
+				notes: eventForm.notes || undefined,
+				sentiment: eventForm.sentiment || undefined,
 				person_ids: [selectedId]
 			});
 			eventForm = {
 				title: '',
 				type: 'One-on-one',
 				started_at: '',
+				ended_at: '',
 				duration_minutes: 45,
 				context: '',
-				summary: ''
+				summary: '',
+				notes: '',
+				sentiment: ''
 			};
 			await Promise.all([loadPeople(), loadSelectedPerson(selectedId)]);
 		} catch (err) {
@@ -540,26 +668,77 @@
 	}
 
 	async function submitLocation() {
-		if (!selectedId) return;
+		if (!selectedId || !locationForm.selected_location_id) return;
 		try {
 			selectedPersonDetail = await addPersonLocation(selectedId, {
-				location: {
-					label: null,
-					city: locationForm.city || null,
-					region: locationForm.region || null,
-					country: locationForm.country || null,
-					address_line: null,
-					latitude: null,
-					longitude: null,
-					location_type: 'Home',
-					notes: null
-				},
-				is_primary: true
+				location_id: locationForm.selected_location_id,
+				is_primary: locationForm.is_primary,
+				notes: locationForm.link_notes || undefined
 			});
-			locationForm = { city: '', region: '', country: '' };
+			locationForm = {
+				location_search: '',
+				selected_location_id: locations[0]?.id || '',
+				link_notes: '',
+				is_primary: true
+			};
 			await loadPeople();
 		} catch (err) {
 			error = err instanceof Error ? err.message : 'Failed to add location.';
+		}
+	}
+
+	function filteredLocations() {
+		const search = locationForm.location_search.trim().toLowerCase();
+		if (!search) return locations;
+		return locations.filter((location) =>
+			[
+				location.label,
+				location.address_line,
+				location.city,
+				location.region,
+				location.country,
+				location.location_type,
+				location.notes
+			]
+				.filter(Boolean)
+				.some((value) => value!.toLowerCase().includes(search))
+		);
+	}
+
+	function locationOptionLabel(location: Location) {
+		const title = location.label || location.address_line || location.city || 'Untitled location';
+		const subtitle = [location.city, location.region, location.country].filter(Boolean).join(', ');
+		return subtitle ? `${title} · ${subtitle}` : title;
+	}
+
+	async function submitNewLocation() {
+		try {
+			const created = await createLocation({
+				label: locationCreateForm.label || null,
+				address_line: locationCreateForm.address_line || null,
+				city: locationCreateForm.city || null,
+				region: locationCreateForm.region || null,
+				country: locationCreateForm.country || null,
+				location_type: locationCreateForm.location_type || 'Home',
+				notes: locationCreateForm.notes || null,
+				latitude: null,
+				longitude: null
+			});
+			await loadLocations();
+			locationForm.selected_location_id = created.id;
+			locationForm.location_search = locationOptionLabel(created);
+			locationCreateForm = {
+				label: '',
+				address_line: '',
+				city: '',
+				region: '',
+				country: '',
+				location_type: 'Home',
+				notes: ''
+			};
+			showCreateLocationModal = false;
+		} catch (err) {
+			error = err instanceof Error ? err.message : 'Failed to create location.';
 		}
 	}
 
@@ -570,9 +749,20 @@
 				organization_id: roleForm.organization_id,
 				title: roleForm.title || undefined,
 				role_type: roleForm.role_type || undefined,
-				is_current: true
+				start_date: roleForm.start_date || undefined,
+				end_date: roleForm.end_date || undefined,
+				is_current: roleForm.is_current,
+				notes: roleForm.notes || undefined
 			});
-			roleForm = { organization_id: organizations[0]?.id || '', title: '', role_type: '' };
+			roleForm = {
+				organization_id: organizations[0]?.id || '',
+				title: '',
+				role_type: '',
+				start_date: '',
+				end_date: '',
+				is_current: true,
+				notes: ''
+			};
 		} catch (err) {
 			error = err instanceof Error ? err.message : 'Failed to add organization role.';
 		}
@@ -666,8 +856,7 @@
 						class:selected={selectedPerson?.id === person.id}
 						class="row item"
 						onclick={() => {
-							selectedId = person.id;
-							editingSelected = false;
+							void selectPerson(person.id);
 						}}
 					>
 						<span>{person.display_name}</span>
@@ -710,10 +899,6 @@
 							<input bind:value={selectedEditForm.display_name} required />
 						</label>
 						<label>
-							<span>Location</span>
-							<input bind:value={selectedEditForm.primary_location} />
-						</label>
-						<label>
 							<span>Given name</span>
 							<input bind:value={selectedEditForm.given_name} />
 						</label>
@@ -725,6 +910,28 @@
 							<span>First met</span>
 							<input bind:value={selectedEditForm.first_met_date} type="date" />
 						</label>
+						<label class="wide">
+							<span>Primary location search</span>
+							<input bind:value={selectedEditForm.location_search} placeholder="Cafe, street, city, country" />
+						</label>
+						<label class="wide">
+							<span>Primary location</span>
+							<select bind:value={selectedEditForm.selected_location_id} size="5">
+								<option value="">No primary location</option>
+								{#each locations.filter((location) =>
+									!selectedEditForm.location_search.trim()
+										? true
+										: [location.label, location.address_line, location.city, location.region, location.country, location.location_type, location.notes]
+												.filter(Boolean)
+												.some((value) => value!.toLowerCase().includes(selectedEditForm.location_search.trim().toLowerCase()))
+								) as location (location.id)}
+									<option value={location.id}>{locationOptionLabel(location)}</option>
+								{/each}
+							</select>
+						</label>
+						<div class="wide inline-actions">
+							<button type="button" onclick={() => (showCreateLocationModal = true)}>Create new location</button>
+						</div>
 						<div class="field">
 							<span>Relationship score</span>
 							<p>{selectedPersonDetail.relationship_score} · {selectedPersonDetail.relationship_category}</p>
@@ -879,7 +1086,7 @@
 							<ul>
 								{#if selectedPersonDetail.locations.length}
 									{#each selectedPersonDetail.locations as item (item.id)}
-										<li>{item.location.city || item.location.label || '—'} {item.location.country || ''}</li>
+										<li><a href={resolve(`/locations?id=${item.location.id}`)}>{item.location.city || item.location.label || '—'} {item.location.country || ''}</a></li>
 									{/each}
 								{:else}
 									<li>No structured locations yet.</li>
@@ -968,9 +1175,43 @@
 						<input bind:value={form.family_name} />
 					</label>
 					<label>
-						<span>Location</span>
-						<input bind:value={form.primary_location} />
+						<span>Nickname</span>
+						<input bind:value={form.nickname} />
 					</label>
+					<label>
+						<span>Pronouns</span>
+						<input bind:value={form.pronouns} placeholder="she/her, he/him, they/them" />
+					</label>
+					<label class="wide">
+						<span>Short bio</span>
+						<textarea bind:value={form.short_bio} rows="2"></textarea>
+					</label>
+					<label>
+						<span>First met date</span>
+						<input bind:value={form.first_met_date} type="date" />
+					</label>
+					<label class="wide">
+						<span>Primary location search</span>
+						<input bind:value={form.location_search} placeholder="Cafe, street, city, country" />
+					</label>
+					<label class="wide">
+						<span>Primary location</span>
+						<select bind:value={form.selected_location_id} size="5">
+							<option value="">No primary location</option>
+							{#each locations.filter((location) =>
+								!form.location_search.trim()
+									? true
+									: [location.label, location.address_line, location.city, location.region, location.country, location.location_type, location.notes]
+											.filter(Boolean)
+											.some((value) => value!.toLowerCase().includes(form.location_search.trim().toLowerCase()))
+							) as location (location.id)}
+								<option value={location.id}>{locationOptionLabel(location)}</option>
+							{/each}
+						</select>
+					</label>
+					<div class="wide inline-actions">
+						<button type="button" onclick={() => (showCreateLocationModal = true)}>Create new location</button>
+					</div>
 					<label class="wide">
 						<span>Relationship summary</span>
 						<textarea bind:value={form.relationship_summary} rows="2"></textarea>
@@ -998,6 +1239,10 @@
 						<span>Contact label</span>
 						<input bind:value={form.contact_label} placeholder="Personal, work, assistant" />
 					</label>
+					<label class="wide">
+						<span>Contact notes</span>
+						<input bind:value={form.contact_notes} placeholder="Preferred channel, assistant, time zone" />
+					</label>
 					<label>
 						<span>Profile platform</span>
 						<select bind:value={form.profile_platform}>
@@ -1010,6 +1255,14 @@
 					<label class="wide">
 						<span>Profile URL or handle</span>
 						<input bind:value={form.profile_url} />
+					</label>
+					<label>
+						<span>Profile label</span>
+						<input bind:value={form.profile_label} placeholder="Main, personal site, archive" />
+					</label>
+					<label class="wide">
+						<span>Profile notes</span>
+						<input bind:value={form.profile_notes} placeholder="What this profile is used for" />
 					</label>
 					<label class="wide">
 						<span>Notes</span>
@@ -1047,6 +1300,9 @@
 					<div class="wide">
 						<DateTimeField bind:value={eventForm.started_at} label="Started at" />
 					</div>
+					<div class="wide">
+						<DateTimeField bind:value={eventForm.ended_at} label="Ended at" />
+					</div>
 					<label class="wide">
 						<span>Context</span>
 						<input bind:value={eventForm.context} />
@@ -1054,6 +1310,14 @@
 					<label class="wide">
 						<span>Summary</span>
 						<textarea bind:value={eventForm.summary} rows="3"></textarea>
+					</label>
+					<label class="wide">
+						<span>Notes</span>
+						<textarea bind:value={eventForm.notes} rows="3"></textarea>
+					</label>
+					<label>
+						<span>Sentiment</span>
+						<input bind:value={eventForm.sentiment} placeholder="Positive, neutral, tense" />
 					</label>
 					<button type="submit">Log event</button>
 				</form>
@@ -1102,19 +1366,30 @@
 					submitLocation();
 				}}>
 					<h3>Add location to selected person</h3>
-					<label>
-						<span>City</span>
-						<input bind:value={locationForm.city} />
+					<label class="wide">
+						<span>Search existing locations</span>
+						<input bind:value={locationForm.location_search} placeholder="Cafe, street, city, country" />
 					</label>
-					<label>
-						<span>Region</span>
-						<input bind:value={locationForm.region} />
+					<label class="wide">
+						<span>Choose location</span>
+						<select bind:value={locationForm.selected_location_id} size="6">
+							{#each filteredLocations() as location (location.id)}
+								<option value={location.id}>{locationOptionLabel(location)}</option>
+							{/each}
+						</select>
 					</label>
-					<label>
-						<span>Country</span>
-						<input bind:value={locationForm.country} />
+					<div class="wide inline-actions">
+						<button type="button" onclick={() => (showCreateLocationModal = true)}>Create new location</button>
+					</div>
+					<label class="wide">
+						<span>Link notes</span>
+						<textarea bind:value={locationForm.link_notes} rows="2" placeholder="Why this place matters for this person"></textarea>
 					</label>
-					<button type="submit">Add location</button>
+					<label class="checkbox">
+						<input bind:checked={locationForm.is_primary} type="checkbox" />
+						<span>Primary location</span>
+					</label>
+					<button type="submit" disabled={!locationForm.selected_location_id}>Add location</button>
 				</form>
 
 				<form class="stacked separator" onsubmit={(event) => {
@@ -1138,11 +1413,91 @@
 						<span>Role type</span>
 						<input bind:value={roleForm.role_type} />
 					</label>
+					<label>
+						<span>Start date</span>
+						<input bind:value={roleForm.start_date} type="date" />
+					</label>
+					<label>
+						<span>End date</span>
+						<input bind:value={roleForm.end_date} type="date" />
+					</label>
+					<label class="checkbox">
+						<input bind:checked={roleForm.is_current} type="checkbox" />
+						<span>Current role</span>
+					</label>
+					<label class="wide">
+						<span>Notes</span>
+						<textarea bind:value={roleForm.notes} rows="2"></textarea>
+					</label>
 					<button type="submit">Add role</button>
 				</form>
 			</div>
 		</section>
 	</section>
+
+	{#if showCreateLocationModal}
+		<div
+			class="modal-backdrop"
+			role="button"
+			tabindex="0"
+			aria-label="Close create location modal"
+			onclick={() => (showCreateLocationModal = false)}
+			onkeydown={(event) => {
+				if (event.key === 'Escape' || event.key === 'Enter' || event.key === ' ') {
+					showCreateLocationModal = false;
+				}
+			}}
+		>
+			<div
+				class="modal-card"
+				role="dialog"
+				tabindex="-1"
+				aria-modal="true"
+				aria-label="Create location"
+				onclick={(event) => event.stopPropagation()}
+				onkeydown={(event) => event.stopPropagation()}
+			>
+				<form class="stacked" onsubmit={(event) => {
+					event.preventDefault();
+					submitNewLocation();
+				}}>
+					<h3>Create location</h3>
+					<label>
+						<span>Label</span>
+						<input bind:value={locationCreateForm.label} placeholder="Blue Bottle Mint Plaza" />
+					</label>
+					<label class="wide">
+						<span>Street / address line</span>
+						<input bind:value={locationCreateForm.address_line} />
+					</label>
+					<label>
+						<span>City</span>
+						<input bind:value={locationCreateForm.city} />
+					</label>
+					<label>
+						<span>Region</span>
+						<input bind:value={locationCreateForm.region} />
+					</label>
+					<label>
+						<span>Country</span>
+						<input bind:value={locationCreateForm.country} />
+					</label>
+					<label>
+						<span>Location type</span>
+						<input bind:value={locationCreateForm.location_type} placeholder="Home, Work, Cafe" />
+					</label>
+					<label class="wide">
+						<span>Location notes</span>
+						<textarea bind:value={locationCreateForm.notes} rows="3"></textarea>
+					</label>
+					<div class="wide modal-actions">
+						<button type="button" onclick={() => (showCreateLocationModal = false)}>Cancel</button>
+						<button type="submit">Create and select</button>
+					</div>
+				</form>
+			</div>
+		</div>
+	{/if}
 </main>
 
 <style>
@@ -1241,6 +1596,23 @@
 	label {
 		display: grid;
 		gap: 0.35rem;
+	}
+
+	.checkbox {
+		display: flex;
+		align-items: center;
+		gap: 0.6rem;
+	}
+
+	.checkbox input {
+		width: auto;
+	}
+
+	.checkbox span {
+		font-size: 0.8rem;
+		letter-spacing: normal;
+		text-transform: none;
+		color: var(--text);
 	}
 
 	input,
@@ -1422,6 +1794,34 @@
 		padding: 0.85rem;
 		border: 1px solid var(--line-strong);
 		background: var(--panel-strong);
+	}
+
+	.modal-backdrop {
+		position: fixed;
+		inset: 0;
+		display: grid;
+		place-items: center;
+		padding: 1.25rem;
+		background: rgba(17, 17, 17, 0.38);
+		z-index: 40;
+	}
+
+	.modal-card {
+		width: min(42rem, 100%);
+		border: 1px solid var(--line-strong);
+		background: var(--panel-strong);
+		box-shadow: var(--shadow);
+	}
+
+	.modal-actions {
+		display: flex;
+		justify-content: flex-end;
+		gap: 0.75rem;
+	}
+
+	.modal-actions button,
+	.inline-actions button {
+		width: auto;
 	}
 
 	@media (max-width: 1100px) {

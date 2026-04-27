@@ -55,6 +55,7 @@ def list_events(
     q: str | None = Query(default=None),
     person_id: UUID | None = None,
     organization_id: UUID | None = None,
+    location_id: UUID | None = None,
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
 ) -> list[EventRead]:
@@ -78,6 +79,10 @@ def list_events(
         organization_filter = InteractionEvent.organizations.any(Organization.id == organization_id)
         statement = statement.where(organization_filter)
         count_statement = count_statement.where(organization_filter)
+    if location_id:
+        location_filter = InteractionEvent.locations.any(Location.id == location_id)
+        statement = statement.where(location_filter)
+        count_statement = count_statement.where(location_filter)
     response.headers["X-Total-Count"] = str(db.scalar(count_statement) or 0)
     response.headers["X-Limit"] = str(limit)
     response.headers["X-Offset"] = str(offset)

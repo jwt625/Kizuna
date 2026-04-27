@@ -19,6 +19,14 @@ from app.models.crm import (
     event_organizations,
     event_people,
 )
+from app.models.notes import (
+    NoteEntityMention,
+    NoteEventDraft,
+    NoteExtractionRun,
+    NoteMatchCandidate,
+    NoteReviewDecision,
+    NoteSource,
+)
 
 __all__ = [
     "ContactMethod",
@@ -27,6 +35,12 @@ __all__ = [
     "ExternalProfile",
     "InteractionEvent",
     "Location",
+    "NoteEntityMention",
+    "NoteEventDraft",
+    "NoteExtractionRun",
+    "NoteMatchCandidate",
+    "NoteReviewDecision",
+    "NoteSource",
     "Organization",
     "Person",
     "PersonOrganization",

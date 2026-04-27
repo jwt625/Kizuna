@@ -64,7 +64,8 @@ What it does:
 - reads `ExternalProfile` rows with platform `LinkedIn`
 - joins them back to `Person`
 - dedupes by canonical LinkedIn profile URL
-- processes profiles in batches
+- builds and reuses a persisted global random queue
+- processes the next runnable profiles in batches
 - pauses a random 10-30 seconds between profiles by default
 - reuses one Firefox session when healthy, but restarts it periodically
 - appends one JSON line per scrape attempt so interruptions can resume cleanly
@@ -81,9 +82,10 @@ Outputs:
 Resume behavior:
 
 - successful profiles are skipped on rerun
-- errored profiles are skipped by default so a rerun does not loop forever on the same failures
+- interrupted profiles are retried on the next run
+- errored profiles are skipped by default so the queue keeps moving
 - use `--retry-errors` to retry previously failed profiles
-- if the process is interrupted mid-profile, that URL has no successful terminal record and will be retried on the next run
+- `--limit N` means the next `N` runnable profiles from the saved queue
 - use `--dry-run` to inspect target counts and resume state without launching Firefox
 
 ## Why Selenium + Firefox Profile

@@ -1,14 +1,19 @@
 <script lang="ts">
+	import { goto } from '$app/navigation';
 	import { onMount } from 'svelte';
 	import { resolve } from '$app/paths';
+	import { page } from '$app/state';
 	import PreviewLink from '$lib/components/PreviewLink.svelte';
 	import {
 		addOrganizationLocation,
 		addOrganizationTag,
+		createLocation,
 		createOrganization,
 		getOrganization,
+		listLocations,
 		listOrganizations,
 		updateOrganization,
+		type Location,
 		type Organization,
 		type OrganizationDetail
 	} from '$lib/api';
@@ -27,6 +32,7 @@
 	let sortField = $state<OrganizationSortField | null>(null);
 	let sortDirection = $state<SortDirection>('none');
 	let organizations = $state<Organization[]>([]);
+	let locations = $state<Location[]>([]);
 	let selectedId = $state('');
 	let selectedOrganizationDetail = $state<OrganizationDetail | null>(null);
 
@@ -34,7 +40,8 @@
 		name: '',
 		type: 'Other',
 		industry: '',
-		location: '',
+		selected_location_id: '',
+		location_search: '',
 		website: '',
 		description: '',
 		notes: ''
@@ -44,19 +51,44 @@
 		name: '',
 		type: 'Other',
 		industry: '',
-		location: '',
+		selected_location_id: '',
+		location_search: '',
 		website: '',
 		description: '',
 		notes: ''
 	});
 
 	let tagForm = $state({ name: '' });
-	let locationForm = $state({ city: '', region: '', country: '' });
+	let locationForm = $state({
+		location_search: '',
+		selected_location_id: '',
+		link_notes: '',
+		is_primary: true
+	});
+	let showCreateLocationModal = $state(false);
+	let locationCreateForm = $state({
+		label: '',
+		address_line: '',
+		city: '',
+		region: '',
+		country: '',
+		location_type: 'Work',
+		notes: ''
+	});
 
+	const requestedOrganizationId = $derived(page.url.searchParams.get('id') ?? '');
 	const sortedOrganizations = $derived(sortOrganizations(organizations, sortField, sortDirection));
 	const selectedOrganization = $derived(
 		sortedOrganizations.find((organization) => organization.id === selectedId) ?? sortedOrganizations[0] ?? null
 	);
+
+	$effect(() => {
+		const nextId = requestedOrganizationId;
+		if (nextId && nextId !== selectedId) {
+			selectedId = nextId;
+			editingSelected = false;
+		}
+	});
 
 	$effect(() => {
 		if (selectedId) {
@@ -64,7 +96,9 @@
 		}
 	});
 
-	onMount(loadOrganizations);
+	onMount(async () => {
+		await Promise.all([loadOrganizations(), loadLocations()]);
+	});
 
 	function sortOrganizations(items: Organization[], field: OrganizationSortField | null, direction: SortDirection) {
 		if (!field || direction === 'none') {
@@ -98,15 +132,46 @@
 	}
 
 	function syncSelectedEditForm(detail: OrganizationDetail) {
+		const primaryStructuredLocation = detail.locations.find((item) => item.is_primary)?.location ?? detail.locations[0]?.location ?? null;
 		selectedEditForm = {
 			name: detail.name || '',
 			type: detail.type || 'Other',
 			industry: detail.industry || '',
-			location: detail.location || '',
+			selected_location_id: primaryStructuredLocation?.id || '',
+			location_search: primaryStructuredLocation ? locationOptionLabel(primaryStructuredLocation) : detail.location || '',
 			website: detail.website || '',
 			description: detail.description || '',
 			notes: detail.notes || ''
 		};
+	}
+
+	function locationSummary(location: Location | null | undefined) {
+		if (!location) return '';
+		return [location.city, location.region, location.country].filter(Boolean).join(', ') || location.label || location.address_line || '';
+	}
+
+	function selectedLocationById(locationId: string) {
+		return locations.find((location) => location.id === locationId) ?? null;
+	}
+
+	async function syncSelectedOrganizationInUrl(organizationId: string) {
+		const currentUrl = new URL(page.url);
+		if (currentUrl.searchParams.get('id') === organizationId) {
+			return;
+		}
+		currentUrl.searchParams.set('id', organizationId);
+		await goto(currentUrl.pathname + currentUrl.search, {
+			replaceState: true,
+			noScroll: true,
+			keepFocus: true,
+			invalidateAll: false
+		});
+	}
+
+	async function selectOrganization(organizationId: string) {
+		selectedId = organizationId;
+		editingSelected = false;
+		await syncSelectedOrganizationInUrl(organizationId);
 	}
 
 	async function loadOrganizations() {
@@ -115,16 +180,28 @@
 		try {
 			organizations = await listOrganizations({ q: query, limit: 100, industry: industry || undefined });
 			const available = sortOrganizations(organizations, sortField, sortDirection);
-			if (!selectedId && available[0]) {
+			if (requestedOrganizationId && available.some((organization) => organization.id === requestedOrganizationId)) {
+				selectedId = requestedOrganizationId;
+			} else if (!selectedId && available[0]) {
 				selectedId = available[0].id;
-			}
-			if (selectedId && !available.some((organization) => organization.id === selectedId) && available[0]) {
+			} else if (selectedId && !available.some((organization) => organization.id === selectedId) && available[0]) {
 				selectedId = available[0].id;
 			}
 		} catch (err) {
 			error = err instanceof Error ? err.message : 'Failed to load organizations.';
 		} finally {
 			loading = false;
+		}
+	}
+
+	async function loadLocations() {
+		try {
+			locations = await listLocations({ limit: 200 });
+			if (!locationForm.selected_location_id && locations[0]) {
+				locationForm.selected_location_id = locations[0].id;
+			}
+		} catch (err) {
+			error = err instanceof Error ? err.message : 'Failed to load locations.';
 		}
 	}
 
@@ -157,15 +234,22 @@
 		savingSelection = true;
 		error = '';
 		try {
+			const selectedLocation = selectedLocationById(selectedEditForm.selected_location_id);
 			selectedOrganizationDetail = await updateOrganization(selectedId, {
 				name: selectedEditForm.name,
 				type: selectedEditForm.type,
 				industry: selectedEditForm.industry || null,
-				location: selectedEditForm.location || null,
+				location: locationSummary(selectedLocation) || null,
 				website: selectedEditForm.website || null,
 				description: selectedEditForm.description || null,
 				notes: selectedEditForm.notes || null
 			});
+			if (selectedLocation) {
+				selectedOrganizationDetail = await addOrganizationLocation(selectedId, {
+					location_id: selectedLocation.id,
+					is_primary: true
+				});
+			}
 			editingSelected = false;
 			await loadOrganizations();
 		} catch (err) {
@@ -179,26 +263,34 @@
 		saving = true;
 		error = '';
 		try {
+			const selectedLocation = selectedLocationById(createForm.selected_location_id);
 			const created = await createOrganization({
 				name: createForm.name,
 				type: createForm.type,
 				industry: createForm.industry || undefined,
-				location: createForm.location || undefined,
+				location: locationSummary(selectedLocation) || undefined,
 				website: createForm.website || undefined,
 				description: createForm.description || undefined,
 				notes: createForm.notes || undefined
 			});
+			if (selectedLocation) {
+				await addOrganizationLocation(created.id, {
+					location_id: selectedLocation.id,
+					is_primary: true
+				});
+			}
 			createForm = {
 				name: '',
 				type: 'Other',
 				industry: '',
-				location: '',
+				selected_location_id: '',
+				location_search: '',
 				website: '',
 				description: '',
 				notes: ''
 			};
 			await loadOrganizations();
-			selectedId = created.id;
+			await selectOrganization(created.id);
 		} catch (err) {
 			error = err instanceof Error ? err.message : 'Failed to create organization.';
 		} finally {
@@ -218,26 +310,77 @@
 	}
 
 	async function submitLocation() {
-		if (!selectedId) return;
+		if (!selectedId || !locationForm.selected_location_id) return;
 		try {
 			selectedOrganizationDetail = await addOrganizationLocation(selectedId, {
-				location: {
-					label: null,
-					city: locationForm.city || null,
-					region: locationForm.region || null,
-					country: locationForm.country || null,
-					address_line: null,
-					latitude: null,
-					longitude: null,
-					location_type: 'Work',
-					notes: null
-				},
-				is_primary: true
+				location_id: locationForm.selected_location_id,
+				is_primary: locationForm.is_primary,
+				notes: locationForm.link_notes || undefined
 			});
-			locationForm = { city: '', region: '', country: '' };
+			locationForm = {
+				location_search: '',
+				selected_location_id: locations[0]?.id || '',
+				link_notes: '',
+				is_primary: true
+			};
 			await loadOrganizations();
 		} catch (err) {
 			error = err instanceof Error ? err.message : 'Failed to add location.';
+		}
+	}
+
+	function filteredLocations() {
+		const search = locationForm.location_search.trim().toLowerCase();
+		if (!search) return locations;
+		return locations.filter((location) =>
+			[
+				location.label,
+				location.address_line,
+				location.city,
+				location.region,
+				location.country,
+				location.location_type,
+				location.notes
+			]
+				.filter(Boolean)
+				.some((value) => value!.toLowerCase().includes(search))
+		);
+	}
+
+	function locationOptionLabel(location: Location) {
+		const title = location.label || location.address_line || location.city || 'Untitled location';
+		const subtitle = [location.city, location.region, location.country].filter(Boolean).join(', ');
+		return subtitle ? `${title} · ${subtitle}` : title;
+	}
+
+	async function submitNewLocation() {
+		try {
+			const created = await createLocation({
+				label: locationCreateForm.label || null,
+				address_line: locationCreateForm.address_line || null,
+				city: locationCreateForm.city || null,
+				region: locationCreateForm.region || null,
+				country: locationCreateForm.country || null,
+				location_type: locationCreateForm.location_type || 'Work',
+				notes: locationCreateForm.notes || null,
+				latitude: null,
+				longitude: null
+			});
+			await loadLocations();
+			locationForm.selected_location_id = created.id;
+			locationForm.location_search = locationOptionLabel(created);
+			locationCreateForm = {
+				label: '',
+				address_line: '',
+				city: '',
+				region: '',
+				country: '',
+				location_type: 'Work',
+				notes: ''
+			};
+			showCreateLocationModal = false;
+		} catch (err) {
+			error = err instanceof Error ? err.message : 'Failed to create location.';
 		}
 	}
 </script>
@@ -290,8 +433,7 @@
 						class:selected={selectedOrganization?.id === organization.id}
 						class="row item"
 						onclick={() => {
-							selectedId = organization.id;
-							editingSelected = false;
+							void selectOrganization(organization.id);
 						}}
 					>
 						<span>{organization.name}</span>
@@ -340,10 +482,28 @@
 							<span>Industry</span>
 							<input bind:value={selectedEditForm.industry} />
 						</label>
-						<label>
-							<span>Location</span>
-							<input bind:value={selectedEditForm.location} />
+						<label class="wide">
+							<span>Primary location search</span>
+							<input bind:value={selectedEditForm.location_search} placeholder="HQ, warehouse, branch, city" />
 						</label>
+						<label class="wide">
+							<span>Primary location</span>
+							<select bind:value={selectedEditForm.selected_location_id} size="5">
+								<option value="">No primary location</option>
+								{#each locations.filter((location) =>
+									!selectedEditForm.location_search.trim()
+										? true
+										: [location.label, location.address_line, location.city, location.region, location.country, location.location_type, location.notes]
+												.filter(Boolean)
+												.some((value) => value!.toLowerCase().includes(selectedEditForm.location_search.trim().toLowerCase()))
+								) as location (location.id)}
+									<option value={location.id}>{locationOptionLabel(location)}</option>
+								{/each}
+							</select>
+						</label>
+						<div class="wide inline-actions">
+							<button type="button" onclick={() => (showCreateLocationModal = true)}>Create new location</button>
+						</div>
 						<label class="wide">
 							<span>Website</span>
 							<input bind:value={selectedEditForm.website} />
@@ -396,7 +556,7 @@
 							<ul>
 								{#if selectedOrganizationDetail.locations.length}
 									{#each selectedOrganizationDetail.locations as item (item.id)}
-										<li>{item.location.city || item.location.label || '—'} {item.location.country || ''}</li>
+										<li><a href={resolve(`/locations?id=${item.location.id}`)}>{item.location.city || item.location.label || '—'} {item.location.country || ''}</a></li>
 									{/each}
 								{:else}
 									<li>No structured locations yet.</li>
@@ -467,10 +627,28 @@
 						<span>Industry</span>
 						<input bind:value={createForm.industry} />
 					</label>
-					<label>
-						<span>Location</span>
-						<input bind:value={createForm.location} />
+					<label class="wide">
+						<span>Primary location search</span>
+						<input bind:value={createForm.location_search} placeholder="HQ, warehouse, branch, city" />
 					</label>
+					<label class="wide">
+						<span>Primary location</span>
+						<select bind:value={createForm.selected_location_id} size="5">
+							<option value="">No primary location</option>
+							{#each locations.filter((location) =>
+								!createForm.location_search.trim()
+									? true
+									: [location.label, location.address_line, location.city, location.region, location.country, location.location_type, location.notes]
+											.filter(Boolean)
+											.some((value) => value!.toLowerCase().includes(createForm.location_search.trim().toLowerCase()))
+							) as location (location.id)}
+								<option value={location.id}>{locationOptionLabel(location)}</option>
+							{/each}
+						</select>
+					</label>
+					<div class="wide inline-actions">
+						<button type="button" onclick={() => (showCreateLocationModal = true)}>Create new location</button>
+					</div>
 					<label class="wide">
 						<span>Website</span>
 						<input bind:value={createForm.website} />
@@ -503,23 +681,98 @@
 					submitLocation();
 				}}>
 					<h3>Add location to selected organization</h3>
-					<label>
-						<span>City</span>
-						<input bind:value={locationForm.city} />
+					<label class="wide">
+						<span>Search existing locations</span>
+						<input bind:value={locationForm.location_search} placeholder="HQ, warehouse, branch, city" />
 					</label>
-					<label>
-						<span>Region</span>
-						<input bind:value={locationForm.region} />
+					<label class="wide">
+						<span>Choose location</span>
+						<select bind:value={locationForm.selected_location_id} size="6">
+							{#each filteredLocations() as location (location.id)}
+								<option value={location.id}>{locationOptionLabel(location)}</option>
+							{/each}
+						</select>
 					</label>
-					<label>
-						<span>Country</span>
-						<input bind:value={locationForm.country} />
+					<div class="wide inline-actions">
+						<button type="button" onclick={() => (showCreateLocationModal = true)}>Create new location</button>
+					</div>
+					<label class="wide">
+						<span>Link notes</span>
+						<textarea bind:value={locationForm.link_notes} rows="2" placeholder="Why this location matters for this organization"></textarea>
 					</label>
-					<button type="submit">Add primary location</button>
+					<label class="checkbox">
+						<input bind:checked={locationForm.is_primary} type="checkbox" />
+						<span>Primary location</span>
+					</label>
+					<button type="submit" disabled={!locationForm.selected_location_id}>Add location</button>
 				</form>
 			</div>
 		</section>
 	</section>
+
+	{#if showCreateLocationModal}
+		<div
+			class="modal-backdrop"
+			role="button"
+			tabindex="0"
+			aria-label="Close create location modal"
+			onclick={() => (showCreateLocationModal = false)}
+			onkeydown={(event) => {
+				if (event.key === 'Escape' || event.key === 'Enter' || event.key === ' ') {
+					showCreateLocationModal = false;
+				}
+			}}
+		>
+			<div
+				class="modal-card"
+				role="dialog"
+				tabindex="-1"
+				aria-modal="true"
+				aria-label="Create location"
+				onclick={(event) => event.stopPropagation()}
+				onkeydown={(event) => event.stopPropagation()}
+			>
+				<form onsubmit={(event) => {
+					event.preventDefault();
+					submitNewLocation();
+				}}>
+					<h3>Create location</h3>
+					<label>
+						<span>Label</span>
+						<input bind:value={locationCreateForm.label} placeholder="HQ, warehouse, branch" />
+					</label>
+					<label class="wide">
+						<span>Street / address line</span>
+						<input bind:value={locationCreateForm.address_line} />
+					</label>
+					<label>
+						<span>City</span>
+						<input bind:value={locationCreateForm.city} />
+					</label>
+					<label>
+						<span>Region</span>
+						<input bind:value={locationCreateForm.region} />
+					</label>
+					<label>
+						<span>Country</span>
+						<input bind:value={locationCreateForm.country} />
+					</label>
+					<label>
+						<span>Location type</span>
+						<input bind:value={locationCreateForm.location_type} placeholder="Work, Warehouse, Office" />
+					</label>
+					<label class="wide">
+						<span>Location notes</span>
+						<textarea bind:value={locationCreateForm.notes} rows="3"></textarea>
+					</label>
+					<div class="wide modal-actions">
+						<button type="button" onclick={() => (showCreateLocationModal = false)}>Cancel</button>
+						<button type="submit">Create and select</button>
+					</div>
+				</form>
+			</div>
+		</div>
+	{/if}
 </main>
 
 <style>
@@ -571,6 +824,23 @@
 		margin: 0.35rem 0 0;
 		font-size: clamp(2rem, 4vw, 3rem);
 		letter-spacing: -0.05em;
+	}
+
+	.checkbox {
+		display: flex;
+		align-items: center;
+		gap: 0.6rem;
+	}
+
+	.checkbox input {
+		width: auto;
+	}
+
+	.checkbox span {
+		font-size: 0.8rem;
+		letter-spacing: normal;
+		text-transform: none;
+		color: var(--text);
 	}
 
 	h2,
@@ -700,6 +970,34 @@
 		padding: 0.85rem;
 		border: 1px solid var(--line-strong);
 		background: var(--panel-strong);
+	}
+
+	.modal-backdrop {
+		position: fixed;
+		inset: 0;
+		display: grid;
+		place-items: center;
+		padding: 1.25rem;
+		background: rgba(17, 17, 17, 0.38);
+		z-index: 40;
+	}
+
+	.modal-card {
+		width: min(42rem, 100%);
+		border: 1px solid var(--line-strong);
+		background: var(--panel-strong);
+		box-shadow: var(--shadow);
+	}
+
+	.modal-actions {
+		display: flex;
+		justify-content: flex-end;
+		gap: 0.75rem;
+	}
+
+	.modal-actions button,
+	.inline-actions button {
+		width: auto;
 	}
 
 	@media (max-width: 1100px) {

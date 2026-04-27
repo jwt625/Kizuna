@@ -13,5 +13,6 @@ class SearchResult(BaseModel):
 class SearchResponse(BaseModel):
     people: list[SearchResult]
     organizations: list[SearchResult]
+    locations: list[SearchResult]
     events: list[SearchResult]
     reminders: list[SearchResult]

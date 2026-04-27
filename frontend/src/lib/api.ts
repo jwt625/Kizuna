@@ -22,12 +22,31 @@ export type Location = {
 	notes: string | null;
 };
 
+export type LocationLink = {
+	id: string;
+	entity_type: string;
+	entity_id: string;
+	title: string;
+	subtitle: string | null;
+	is_primary: boolean;
+	notes: string | null;
+	created_at: string;
+	updated_at: string;
+};
+
 export type EntityLocation = {
 	id: string;
 	location_id: string;
 	is_primary: boolean;
 	notes: string | null;
 	location: Location;
+};
+
+export type LocationDetail = Location & {
+	linked_people: LocationLink[];
+	linked_organizations: LocationLink[];
+	recent_events: Event[];
+	last_event_at: string | null;
 };
 
 export type Tag = {
@@ -187,8 +206,106 @@ export type SearchResult = {
 export type SearchResponse = {
 	people: SearchResult[];
 	organizations: SearchResult[];
+	locations: SearchResult[];
 	events: SearchResult[];
 	reminders: SearchResult[];
+};
+
+export type NoteProviderStatus = {
+	provider_name: string;
+	configured: boolean;
+	reachable: boolean;
+	model_name: string | null;
+	detail: string | null;
+};
+
+export type NoteProviderHealth = {
+	primary: NoteProviderStatus;
+	fallback: NoteProviderStatus | null;
+};
+
+export type NoteSource = {
+	id: string;
+	file_path: string;
+	section_key: string;
+	heading: string;
+	note_date: string | null;
+	body_text: string;
+	content_hash: string;
+	source_type: string;
+	scan_status: string;
+	extraction_status: string;
+	last_scanned_at: string | null;
+	last_extracted_at: string | null;
+	extraction_error: string | null;
+	created_at: string;
+	updated_at: string;
+};
+
+export type NoteMatchCandidate = {
+	id: string;
+	mention_id: string;
+	entity_type: string;
+	entity_id: string | null;
+	label: string;
+	subtitle: string | null;
+	score: number;
+	rationale: string | null;
+	rank: number;
+	is_selected: boolean;
+	created_at: string;
+	updated_at: string;
+};
+
+export type NoteMention = {
+	id: string;
+	source_id: string;
+	extraction_run_id: string;
+	entity_type: string;
+	raw_text: string;
+	normalized_text: string;
+	evidence_text: string | null;
+	confidence: number | null;
+	review_status: string;
+	metadata_json: string | null;
+	candidates: NoteMatchCandidate[];
+	created_at: string;
+	updated_at: string;
+};
+
+export type NoteEventDraft = {
+	id: string;
+	source_id: string;
+	extraction_run_id: string;
+	title: string;
+	event_type: string;
+	summary: string | null;
+	evidence_text: string | null;
+	started_on: string | null;
+	confidence: number | null;
+	review_status: string;
+	metadata_json: string | null;
+	created_at: string;
+	updated_at: string;
+};
+
+export type NoteExtractionRun = {
+	id: string;
+	source_id: string;
+	provider_name: string;
+	model_name: string | null;
+	prompt_version: string;
+	status: string;
+	raw_response_json: string | null;
+	error_detail: string | null;
+	created_at: string;
+	updated_at: string;
+};
+
+export type NoteSourceDetail = NoteSource & {
+	extraction_runs: NoteExtractionRun[];
+	mentions: NoteMention[];
+	event_drafts: NoteEventDraft[];
 };
 
 type QueryValue = string | number | undefined | null;
@@ -241,12 +358,16 @@ export function createPerson(payload: {
 	display_name: string;
 	given_name?: string;
 	family_name?: string;
+	nickname?: string;
+	pronouns?: string;
+	short_bio?: string;
+	first_met_date?: string;
 	primary_location?: string;
 	relationship_summary?: string;
 	how_we_met?: string;
 	notes?: string;
-	contact_methods: Array<{ type: string; value: string; label?: string; is_primary?: boolean }>;
-	external_profiles: Array<{ platform: string; url_or_handle: string; label?: string }>;
+	contact_methods: Array<{ type: string; value: string; label?: string; is_primary?: boolean; notes?: string }>;
+	external_profiles: Array<{ platform: string; url_or_handle: string; label?: string; notes?: string }>;
 }) {
 	return request<Person>('/people', {
 		method: 'POST',
@@ -299,7 +420,9 @@ export function addPersonTag(personId: string, payload: { name: string; color?: 
 
 export function addPersonLocation(
 	personId: string,
-	payload: { location: Omit<Location, 'id'>; is_primary?: boolean; notes?: string }
+	payload:
+		| { location_id: string; is_primary?: boolean; notes?: string }
+		| { location: Omit<Location, 'id'>; is_primary?: boolean; notes?: string }
 ) {
 	return request<PersonDetail>(`/people/${personId}/locations`, {
 		method: 'POST',
@@ -321,6 +444,53 @@ export function addPersonOrganizationRole(
 ) {
 	return request<PersonDetail>(`/people/${personId}/organization-roles`, {
 		method: 'POST',
+		body: JSON.stringify(payload)
+	});
+}
+
+export function listLocations(
+	params: { q?: string; city?: string; country?: string; location_type?: string; limit?: number } = {}
+) {
+	return request<Location[]>(withQuery('/locations', params));
+}
+
+export function getLocation(locationId: string) {
+	return request<LocationDetail>(`/locations/${locationId}`);
+}
+
+export function createLocation(payload: {
+	label?: string | null;
+	city?: string | null;
+	region?: string | null;
+	country?: string | null;
+	address_line?: string | null;
+	latitude?: number | null;
+	longitude?: number | null;
+	location_type?: string;
+	notes?: string | null;
+}) {
+	return request<Location>('/locations', {
+		method: 'POST',
+		body: JSON.stringify(payload)
+	});
+}
+
+export function updateLocation(
+	locationId: string,
+	payload: {
+		label?: string | null;
+		city?: string | null;
+		region?: string | null;
+		country?: string | null;
+		address_line?: string | null;
+		latitude?: number | null;
+		longitude?: number | null;
+		location_type?: string | null;
+		notes?: string | null;
+	}
+) {
+	return request<LocationDetail>(`/locations/${locationId}`, {
+		method: 'PATCH',
 		body: JSON.stringify(payload)
 	});
 }
@@ -375,7 +545,9 @@ export function addOrganizationTag(organizationId: string, payload: { name: stri
 
 export function addOrganizationLocation(
 	organizationId: string,
-	payload: { location: Omit<Location, 'id'>; is_primary?: boolean; notes?: string }
+	payload:
+		| { location_id: string; is_primary?: boolean; notes?: string }
+		| { location: Omit<Location, 'id'>; is_primary?: boolean; notes?: string }
 ) {
 	return request<OrganizationDetail>(`/organizations/${organizationId}/locations`, {
 		method: 'POST',
@@ -384,7 +556,7 @@ export function addOrganizationLocation(
 }
 
 export function listEvents(
-	params: { q?: string; person_id?: string; organization_id?: string; limit?: number } = {}
+	params: { q?: string; person_id?: string; organization_id?: string; location_id?: string; limit?: number } = {}
 ) {
 	return request<Event[]>(withQuery('/events', params));
 }
@@ -525,4 +697,120 @@ export async function importPeopleCsv(file: File) {
 		throw new Error((await response.text()) || `Request failed with status ${response.status}`);
 	}
 	return response.json() as Promise<{ created: number; skipped: number; errors: string[] }>;
+}
+
+export function getNoteProviderHealth() {
+	return request<NoteProviderHealth>('/notes/provider-health');
+}
+
+export function scanNoteSources(payload: {
+	root_path: string;
+	recursive?: boolean;
+	max_files?: number;
+	include_glob?: string;
+}) {
+	return request<{ files_seen: number; sections_seen: number; created: number; updated: number; unchanged: number; sources: NoteSource[] }>(
+		'/notes/scan',
+		{
+			method: 'POST',
+			body: JSON.stringify(payload)
+		}
+	);
+}
+
+export function listNoteSources(params: { extraction_status?: string; limit?: number } = {}) {
+	return request<{ items: NoteSource[] }>(withQuery('/notes/sources', params));
+}
+
+export function getNoteSource(sourceId: string) {
+	return request<NoteSourceDetail>(`/notes/sources/${sourceId}`);
+}
+
+export function extractNoteSource(sourceId: string) {
+	return request<{
+		source: NoteSource;
+		run: NoteExtractionRun;
+		mentions: NoteMention[];
+		event_drafts: NoteEventDraft[];
+	}>(`/notes/sources/${sourceId}/extract`, {
+		method: 'POST'
+	});
+}
+
+export function reviewNoteMention(
+	mentionId: string,
+	payload: {
+		action: 'accept_match' | 'reject' | 'defer' | 'create_new';
+		matched_entity_type?: string | null;
+		matched_entity_id?: string | null;
+		selected_candidate_id?: string | null;
+		notes?: string | null;
+	}
+) {
+	return request<{
+		id: string;
+		mention_id: string;
+		action: string;
+		matched_entity_type: string | null;
+		matched_entity_id: string | null;
+		notes: string | null;
+		created_at: string;
+		updated_at: string;
+	}>(`/notes/mentions/${mentionId}/review`, {
+		method: 'POST',
+		body: JSON.stringify(payload)
+	});
+}
+
+export function updateNoteMention(
+	mentionId: string,
+	payload: {
+		entity_type: 'Person' | 'Organization' | 'Location' | 'Event';
+		raw_text: string;
+		normalized_text?: string | null;
+		evidence_text?: string | null;
+	}
+) {
+	return request<NoteMention>(`/notes/mentions/${mentionId}`, {
+		method: 'PATCH',
+		body: JSON.stringify(payload)
+	});
+}
+
+export function createCanonicalFromNoteMention(
+	mentionId: string,
+	payload: {
+		entity_type: 'Person' | 'Organization' | 'Location' | 'Event';
+		display_name?: string | null;
+		given_name?: string | null;
+		family_name?: string | null;
+		primary_location?: string | null;
+		relationship_summary?: string | null;
+		how_we_met?: string | null;
+		notes?: string | null;
+		organization_type?: string | null;
+		industry?: string | null;
+		location_label?: string | null;
+		location_address_line?: string | null;
+		location_city?: string | null;
+		location_region?: string | null;
+		location_country?: string | null;
+		location_type?: string | null;
+		event_title?: string | null;
+		event_type?: string | null;
+		event_summary?: string | null;
+		event_started_at?: string | null;
+		event_ended_at?: string | null;
+		selected_person_ids?: string[];
+		selected_organization_ids?: string[];
+		selected_location_ids?: string[];
+	}
+) {
+	return request<{ entity_type: string; entity_id: string; review_decision: { id: string; action: string } }>(
+		`/notes/mentions/${mentionId}/create-canonical`,
+		{
+			method: 'POST',
+			body: JSON.stringify(payload)
+		}
+	);
 }

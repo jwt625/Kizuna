@@ -3,7 +3,7 @@ from sqlalchemy import ColumnElement, or_, select, text
 from typing import cast
 
 from app.api.deps import DbSession
-from app.models import EntityTag, InteractionEvent, Organization, Person, PersonOrganization, Reminder, Tag
+from app.models import EntityTag, EntityLocation, InteractionEvent, Location, Organization, Person, PersonOrganization, Reminder, Tag
 from app.schemas.search import SearchResponse, SearchResult
 
 router = APIRouter(prefix="/search", tags=["search"])
@@ -113,6 +113,40 @@ def search(
             .limit(limit)
         )
     )
+    locations = list(
+        db.scalars(
+            select(Location)
+            .where(
+                or_(
+                    text_search_clause(
+                        [
+                            "locations.label",
+                            "locations.city",
+                            "locations.region",
+                            "locations.country",
+                            "locations.address_line",
+                            "locations.notes",
+                        ],
+                        pattern,
+                        q,
+                        dialect,
+                    ),
+                    Location.id.in_(
+                        select(EntityLocation.location_id)
+                        .join(Person, Person.id == EntityLocation.entity_id)
+                        .where(EntityLocation.entity_type == "Person", Person.display_name.ilike(pattern))
+                    ),
+                    Location.id.in_(
+                        select(EntityLocation.location_id)
+                        .join(Organization, Organization.id == EntityLocation.entity_id)
+                        .where(EntityLocation.entity_type == "Organization", Organization.name.ilike(pattern))
+                    ),
+                )
+            )
+            .order_by(Location.country, Location.city, Location.label)
+            .limit(limit)
+        )
+    )
     reminders = list(
         db.scalars(
             select(Reminder)
@@ -143,6 +177,15 @@ def search(
                 subtitle=organization.industry or organization.location,
             )
             for organization in organizations
+        ],
+        locations=[
+            SearchResult(
+                entity_type="Location",
+                id=location.id,
+                title=location.label or location.address_line or location.city or "Untitled location",
+                subtitle=", ".join(part for part in [location.city, location.region, location.country] if part) or location.location_type,
+            )
+            for location in locations
         ],
         events=[
             SearchResult(

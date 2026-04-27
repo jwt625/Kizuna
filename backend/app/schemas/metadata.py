@@ -1,7 +1,7 @@
 from datetime import date
 from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from app.schemas.common import ORMModel, TimestampedSchema
 
@@ -46,9 +46,18 @@ class LocationRead(LocationBase, TimestampedSchema):
 
 
 class EntityLocationCreate(BaseModel):
-    location: LocationCreate
+    location_id: UUID | None = None
+    location: LocationCreate | None = None
     is_primary: bool = False
     notes: str | None = None
+
+    @model_validator(mode="after")
+    def validate_location_reference(self) -> "EntityLocationCreate":
+        if self.location_id is None and self.location is None:
+            raise ValueError("location_id or location must be provided")
+        if self.location_id is not None and self.location is not None:
+            raise ValueError("provide either location_id or location, not both")
+        return self
 
 
 class EntityLocationRead(ORMModel):

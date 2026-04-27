@@ -8,6 +8,7 @@
 	let results = $state<SearchResponse>({
 		people: [],
 		organizations: [],
+		locations: [],
 		events: [],
 		reminders: []
 	});
@@ -15,10 +16,19 @@
 		[
 			{ label: 'People', items: results.people },
 			{ label: 'Organizations', items: results.organizations },
+			{ label: 'Locations', items: results.locations },
 			{ label: 'Events', items: results.events },
 			{ label: 'Reminders', items: results.reminders }
 		] satisfies Array<{ label: string; items: SearchResult[] }>
 	);
+
+	function resultHref(item: SearchResult) {
+		if (item.entity_type === 'Person') return resolve(`/people?id=${item.id}`);
+		if (item.entity_type === 'Organization') return resolve(`/organizations?id=${item.id}`);
+		if (item.entity_type === 'Location') return resolve(`/locations?id=${item.id}`);
+		if (item.entity_type === 'Event') return resolve(`/events?id=${item.id}`);
+		return resolve('/reminders');
+	}
 
 	async function runSearch() {
 		if (!query.trim()) return;
@@ -70,8 +80,10 @@
 					{#if section.items.length}
 						{#each section.items as item (item.id)}
 							<li>
-								<strong>{item.title}</strong>
-								<p>{item.subtitle || '—'}</p>
+								<a class="result-link" href={resultHref(item)}>
+									<strong>{item.title}</strong>
+									<p>{item.subtitle || '—'}</p>
+								</a>
 							</li>
 						{/each}
 					{:else}
@@ -186,6 +198,11 @@
 	li p {
 		display: block;
 		margin: 0;
+	}
+
+	.result-link {
+		display: block;
+		text-decoration: none;
 	}
 
 	li p {

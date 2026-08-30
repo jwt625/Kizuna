@@ -88,6 +88,22 @@ Resume behavior:
 - `--limit N` means the next `N` runnable profiles from the saved queue
 - use `--dry-run` to inspect target counts and resume state without launching Firefox
 
+### `run_linkedin_batch_daily.sh`
+
+Operational wrapper for unattended daily runs of `batch_scrape_linkedin_profiles.py`.
+
+It:
+
+- prevents overlapping runs with a PID lock
+- starts Docker Desktop when needed
+- starts and waits for the repo's Postgres service
+- supplies the minimal `PATH` missing from cron/launchd environments
+- runs headless and processes the next 50 runnable profiles by default
+
+Override the batch limit with `LINKEDIN_DAILY_LIMIT`. The wrapper is intended to be
+called by macOS `launchd` (preferred on laptops because a run missed during sleep is
+started after wake) or by cron. It does not stop Postgres after a run.
+
 ## Why Selenium + Firefox Profile
 
 Playwright was explored first, but the working path for this machine was the exact same broad approach as the preexisting Selenium script in the other repo:

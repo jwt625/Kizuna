@@ -16,6 +16,7 @@ from sqlalchemy.orm import joinedload
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from selenium.common.exceptions import TimeoutException, WebDriverException
+from urllib3.exceptions import ReadTimeoutError
 
 from app.db.session import SessionLocal
 from app.models import ExternalProfile, Person
@@ -227,7 +228,8 @@ def build_progress_snapshot(
         for profile_url, attempt in latest_attempts.items()
         if attempt.get("status") == "error"
     }
-    pending_targets = selected_targets
+    finished_urls = completed_urls | error_urls
+    pending_targets = [target for target in selected_targets if target.profile_url not in finished_urls]
     return {
         "started_at": started_at,
         "updated_at": utc_now_iso(),
@@ -450,7 +452,7 @@ def main() -> None:
                         },
                     )
                     raise
-                except (RuntimeError, TimeoutException, WebDriverException) as exc:
+                except (RuntimeError, TimeoutException, WebDriverException, ReadTimeoutError) as exc:
                     append_jsonl(
                         args.results_jsonl,
                         {

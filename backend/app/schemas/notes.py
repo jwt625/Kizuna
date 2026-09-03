@@ -4,6 +4,7 @@ from uuid import UUID
 from pydantic import BaseModel, Field
 
 from app.schemas.common import TimestampedSchema
+from app.schemas.event import EventType
 
 
 class NoteMentionDraft(BaseModel):
@@ -138,6 +139,22 @@ class NoteMentionUpdate(BaseModel):
     evidence_text: str | None = None
 
 
+class NoteManualMatchRequest(BaseModel):
+    entity_type: str = Field(pattern="^(Person|Organization|Location)$")
+    entity_id: UUID
+
+
+class NoteEventDraftUpdate(BaseModel):
+    title: str | None = Field(default=None, min_length=1, max_length=240)
+    event_type: EventType | None = None
+    started_on: date | None = None
+    summary: str | None = None
+    evidence_text: str | None = None
+    participant_refs: list[str] | None = None
+    organization_refs: list[str] | None = None
+    location_refs: list[str] | None = None
+
+
 class NoteCanonicalCreateRequest(BaseModel):
     entity_type: str = Field(pattern="^(Person|Organization|Location|Event)$")
     display_name: str | None = None
@@ -188,6 +205,28 @@ class NoteExtractionResult(BaseModel):
 
 class NoteSourceListResponse(BaseModel):
     items: list[NoteSourceRead]
+
+
+class NoteSourceReviewSummary(BaseModel):
+    id: UUID
+    heading: str
+    note_date: date | None
+    source_type: str
+    extraction_status: str
+    review_status: str
+    mention_total: int
+    pending_mentions: int
+    resolved_mentions: int
+    rejected_mentions: int
+    event_total: int
+    ready_events: int
+    needs_review_events: int
+    imported_events: int
+    rejected_events: int
+
+
+class NoteReviewSummaryResponse(BaseModel):
+    items: list[NoteSourceReviewSummary]
 
 
 class NoteProviderStatus(BaseModel):

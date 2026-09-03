@@ -317,6 +317,24 @@ export type NoteSourceDetail = NoteSource & {
 	event_drafts: NoteEventDraft[];
 };
 
+export type NoteSourceReviewSummary = {
+	id: string;
+	heading: string;
+	note_date: string | null;
+	source_type: string;
+	extraction_status: string;
+	review_status: string;
+	mention_total: number;
+	pending_mentions: number;
+	resolved_mentions: number;
+	rejected_mentions: number;
+	event_total: number;
+	ready_events: number;
+	needs_review_events: number;
+	imported_events: number;
+	rejected_events: number;
+};
+
 type QueryValue = string | number | undefined | null;
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -790,6 +808,12 @@ export function getNoteSource(sourceId: string) {
 	return request<NoteSourceDetail>(`/notes/sources/${sourceId}`);
 }
 
+export function getNoteReviewSummary(limit = 200) {
+	return request<{ items: NoteSourceReviewSummary[] }>(
+		withQuery('/notes/review-summary', { limit })
+	);
+}
+
 export function extractNoteSource(sourceId: string) {
 	return request<{
 		source: NoteSource;
@@ -834,6 +858,35 @@ export function reviewNoteEventDraft(draftId: string, action: 'commit' | 'reject
 			body: JSON.stringify({ action })
 		}
 	);
+}
+
+export function manuallyMatchNoteMention(
+	mentionId: string,
+	payload: { entity_type: 'Person' | 'Organization' | 'Location'; entity_id: string }
+) {
+	return request(`/notes/mentions/${mentionId}/match`, {
+		method: 'POST',
+		body: JSON.stringify(payload)
+	});
+}
+
+export function updateNoteEventDraft(
+	draftId: string,
+	payload: {
+		title?: string;
+		event_type?: string;
+		started_on?: string;
+		summary?: string | null;
+		evidence_text?: string | null;
+		participant_refs?: string[];
+		organization_refs?: string[];
+		location_refs?: string[];
+	}
+) {
+	return request<NoteEventDraft>(`/notes/event-drafts/${draftId}`, {
+		method: 'PATCH',
+		body: JSON.stringify(payload)
+	});
 }
 
 export function updateNoteMention(

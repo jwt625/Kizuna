@@ -3,10 +3,11 @@ from __future__ import annotations
 from datetime import datetime, timezone
 import json
 from pathlib import Path
+from typing import Any
 from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Query, status
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select
 
 from app.api.deps import DbSession
 from app.models import (
@@ -25,21 +26,25 @@ from app.schemas.notes import (
     NoteCanonicalCreateRequest,
     NoteCanonicalCreateResult,
     NoteEntityMentionRead,
+    NoteEventDraftUpdate,
     NoteEventDraftPayload,
     NoteEventDraftRead,
     NoteExtractionResult,
     NoteExtractionRunRead,
     NoteMentionUpdate,
+    NoteManualMatchRequest,
     NoteExtractionPayload,
     NoteMatchCandidateRead,
     NoteProviderHealthResponse,
     NoteReviewDecisionRead,
     NoteReviewUpdate,
+    NoteReviewSummaryResponse,
     NoteScanRequest,
     NoteScanResult,
     NoteSourceDetailRead,
     NoteSourceListResponse,
     NoteSourceRead,
+    NoteSourceReviewSummary,
 )
 from app.schemas.imports import NoteEventReviewRequest, NoteEventReviewResult
 from app.services.note_llm import PROMPT_VERSION, get_note_extraction_provider
@@ -128,6 +133,63 @@ def list_note_sources(
         statement = statement.where(NoteSource.extraction_status == extraction_status)
     items = list(db.scalars(statement))
     return NoteSourceListResponse(items=[NoteSourceRead.model_validate(item) for item in items])
+
+
+@router.get("/review-summary", response_model=NoteReviewSummaryResponse)
+def note_review_summary(db: DbSession, limit: int = Query(default=200, ge=1, le=500)) -> NoteReviewSummaryResponse:
+    sources = list(
+        db.scalars(select(NoteSource).order_by(NoteSource.note_date.desc().nullslast(), NoteSource.created_at.desc()).limit(limit))
+    )
+    source_ids = [source.id for source in sources]
+    mention_counts = _status_counts(db, NoteEntityMention, source_ids)
+    event_counts = _status_counts(db, NoteEventDraft, source_ids)
+    items: list[NoteSourceReviewSummary] = []
+    for source in sources:
+        mentions = mention_counts.get(source.id, {})
+        events = event_counts.get(source.id, {})
+        mention_total = sum(mentions.values())
+        event_total = sum(events.values())
+        pending_mentions = sum(mentions.get(key, 0) for key in ("Pending", "Deferred", "Create new"))
+        resolved_mentions = sum(mentions.get(key, 0) for key in ("Auto matched", "Accepted", "Created"))
+        rejected_mentions = mentions.get("Rejected", 0)
+        ready_events = events.get("Ready", 0)
+        needs_review_events = events.get("Needs review", 0)
+        imported_events = events.get("Imported", 0)
+        rejected_events = events.get("Rejected", 0)
+        if event_total == 0:
+            review_status = "No events"
+        elif imported_events == event_total:
+            review_status = "Imported"
+        elif rejected_events == event_total:
+            review_status = "Rejected"
+        elif imported_events:
+            review_status = "Partially imported"
+        elif pending_mentions or needs_review_events:
+            review_status = "Needs review"
+        elif ready_events:
+            review_status = "Ready"
+        else:
+            review_status = "Staged"
+        items.append(
+            NoteSourceReviewSummary(
+                id=source.id,
+                heading=source.heading,
+                note_date=source.note_date,
+                source_type=source.source_type,
+                extraction_status=source.extraction_status,
+                review_status=review_status,
+                mention_total=mention_total,
+                pending_mentions=pending_mentions,
+                resolved_mentions=resolved_mentions,
+                rejected_mentions=rejected_mentions,
+                event_total=event_total,
+                ready_events=ready_events,
+                needs_review_events=needs_review_events,
+                imported_events=imported_events,
+                rejected_events=rejected_events,
+            )
+        )
+    return NoteReviewSummaryResponse(items=items)
 
 
 @router.get("/sources/{source_id}", response_model=NoteSourceDetailRead)
@@ -278,6 +340,60 @@ def update_note_mention(mention_id: UUID, payload: NoteMentionUpdate, db: DbSess
         )
     db.commit()
     return _serialize_mention(db, mention)
+
+
+@router.post("/mentions/{mention_id}/match", response_model=NoteReviewDecisionRead)
+def manually_match_note_mention(
+    mention_id: UUID, payload: NoteManualMatchRequest, db: DbSession
+) -> NoteReviewDecisionRead:
+    mention = db.get(NoteEntityMention, mention_id)
+    if mention is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Note mention not found")
+    if mention.entity_type != payload.entity_type:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Entity type does not match mention")
+    model = {"Person": Person, "Organization": Organization, "Location": Location}[payload.entity_type]
+    entity = db.get(model, payload.entity_id)
+    if entity is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Canonical entity not found")
+    for candidate in db.scalars(select(NoteMatchCandidate).where(NoteMatchCandidate.mention_id == mention.id)):
+        candidate.is_selected = candidate.entity_type == payload.entity_type and candidate.entity_id == payload.entity_id
+    mention.review_status = "Accepted"
+    decision = NoteReviewDecision(
+        mention_id=mention.id,
+        action="accept_match",
+        matched_entity_type=payload.entity_type,
+        matched_entity_id=payload.entity_id,
+        notes="Manually selected existing entity",
+    )
+    db.add(decision)
+    db.commit()
+    db.refresh(decision)
+    return NoteReviewDecisionRead.model_validate(decision)
+
+
+@router.patch("/event-drafts/{draft_id}", response_model=NoteEventDraftRead)
+def update_event_draft(draft_id: UUID, payload: NoteEventDraftUpdate, db: DbSession) -> NoteEventDraftRead:
+    draft = db.get(NoteEventDraft, draft_id)
+    if draft is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Event draft not found")
+    if draft.review_status == "Imported":
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Imported event drafts cannot be edited")
+    metadata = json.loads(draft.metadata_json or "{}")
+    changes = payload.model_dump(exclude_unset=True)
+    for field in ("title", "event_type", "started_on", "summary", "evidence_text"):
+        if field in changes:
+            setattr(draft, field, changes[field])
+    if "started_on" in changes and changes["started_on"] is not None:
+        metadata["occurred_on"] = changes["started_on"].isoformat()
+    for field in ("title", "event_type", "summary", "evidence_text", "participant_refs", "organization_refs", "location_refs"):
+        if field in changes:
+            metadata[field] = changes[field]
+    _validate_event_refs(db, draft, metadata)
+    metadata["review_reasons"] = []
+    draft.metadata_json = json.dumps(metadata, default=str)
+    draft.review_status = "Ready" if not event_reference_summary(db, draft)["unresolved_refs"] else "Needs review"
+    db.commit()
+    return _serialize_event_draft(db, draft)
 
 
 @router.post("/mentions/{mention_id}/create-canonical", response_model=NoteCanonicalCreateResult, status_code=status.HTTP_201_CREATED)
@@ -484,3 +600,51 @@ def _serialize_event_draft(db: DbSession, event_draft: NoteEventDraft) -> NoteEv
         ),
         **event_reference_summary(db, event_draft),
     )
+
+
+def _status_counts(db: DbSession, model: Any, source_ids: list[UUID]) -> dict[UUID, dict[str, int]]:
+    counts: dict[UUID, dict[str, int]] = {}
+    if not source_ids:
+        return counts
+    rows = db.execute(
+        select(model.source_id, model.review_status, func.count())
+        .where(model.source_id.in_(source_ids))
+        .group_by(model.source_id, model.review_status)
+    )
+    for source_id, review_status, count in rows:
+        counts.setdefault(source_id, {})[review_status] = count
+    return counts
+
+
+def _validate_event_refs(db: DbSession, draft: NoteEventDraft, metadata: dict[str, Any]) -> None:
+    mention_types: dict[str, str] = {}
+    mentions = db.scalars(
+        select(NoteEntityMention).where(
+            NoteEntityMention.source_id == draft.source_id,
+            NoteEntityMention.extraction_run_id == draft.extraction_run_id,
+        )
+    )
+    for mention in mentions:
+        try:
+            ref = json.loads(mention.metadata_json or "{}").get("ref")
+        except json.JSONDecodeError:
+            ref = None
+        if ref:
+            mention_types[str(ref)] = mention.entity_type
+    expected = {
+        "participant_refs": "Person",
+        "organization_refs": "Organization",
+        "location_refs": "Location",
+    }
+    for field, entity_type in expected.items():
+        refs = metadata.get(field, [])
+        if not isinstance(refs, list) or not all(isinstance(ref, str) for ref in refs):
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=f"Invalid {field}")
+        if len(refs) != len(set(refs)):
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=f"Duplicate {field}")
+        invalid = [ref for ref in refs if mention_types.get(ref) != entity_type]
+        if invalid:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail={"message": f"Invalid {field}", "refs": invalid},
+            )

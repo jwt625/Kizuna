@@ -116,11 +116,45 @@ def test_jsonl_low_confidence_match_requires_review_before_commit() -> None:
     assert client.post(f"/api/notes/event-drafts/{draft['id']}/review", json={"action": "commit"}).status_code == 409
 
     reviewed = client.post(
-        f"/api/notes/mentions/{mention['id']}/review",
-        json={"action": "accept_match", "selected_candidate_id": mention["candidates"][0]["id"]},
+        f"/api/notes/mentions/{mention['id']}/match",
+        json={"entity_type": "Person", "entity_id": person_response.json()["id"]},
     )
     assert reviewed.status_code == 200
     assert client.post(f"/api/notes/event-drafts/{draft['id']}/review", json={"action": "commit"}).status_code == 200
+
+
+def test_jsonl_review_summary_and_event_edit() -> None:
+    client = TestClient(app)
+    record = _record(key="notes/2026-01#2026-01-19", confidence=0.5)
+    record["source"]["heading"] = "2026-01-19"
+    record["source"]["note_date"] = "2026-01-19"
+    event = record["events"][0]
+    event["occurred_on"] = "2026-01-19"
+    event["organization_refs"] = []
+    event["location_refs"] = []
+    record["mentions"] = record["mentions"][:1]
+    upload = _upload(client, [record])
+    source_id = upload.json()["source_ids"][0]
+    detail = client.get(f"/api/notes/sources/{source_id}").json()
+    draft = detail["event_drafts"][0]
+
+    summary = client.get("/api/notes/review-summary").json()["items"]
+    source_summary = next(item for item in summary if item["id"] == source_id)
+    assert source_summary["review_status"] == "Needs review"
+    assert source_summary["pending_mentions"] == 1
+    assert source_summary["needs_review_events"] == 1
+    update = client.patch(
+        f"/api/notes/event-drafts/{draft['id']}",
+        json={"title": "Corrected interaction", "participant_refs": []},
+    )
+    assert update.status_code == 200
+    assert update.json()["title"] == "Corrected interaction"
+    assert update.json()["review_status"] == "Ready"
+    assert update.json()["unresolved_refs"] == []
+    rejected = client.post(f"/api/notes/event-drafts/{draft['id']}/review", json={"action": "reject"})
+    assert rejected.status_code == 200
+    summary = client.get("/api/notes/review-summary").json()["items"]
+    assert next(item for item in summary if item["id"] == source_id)["review_status"] == "Rejected"
 
 
 def test_jsonl_import_is_idempotent_and_reports_invalid_lines() -> None:

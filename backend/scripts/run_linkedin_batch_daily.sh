@@ -8,13 +8,24 @@ PROJECT_DIR="${BACKEND_DIR:h}"
 RUN_DIR="${PROJECT_DIR}/import/linkedin_batch_scrape"
 LOCK_DIR="${RUN_DIR}/daily-run.lock"
 DAILY_LIMIT="${LINKEDIN_DAILY_LIMIT:-50}"
+RUN_TIMEOUT_SECONDS="${LINKEDIN_DAILY_TIMEOUT_SECONDS:-4230}"
 
 # launchd and cron both provide a minimal PATH.
 export PATH="/usr/local/bin:/opt/homebrew/bin:${HOME}/.local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 
 mkdir -p "${RUN_DIR}/logs"
 exec >> "${RUN_DIR}/logs/daily.stdout.log" 2>> "${RUN_DIR}/logs/daily.stderr.log"
-echo "[$(date '+%Y-%m-%d %H:%M:%S %Z')] Starting daily LinkedIn batch (limit=${DAILY_LIMIT})."
+
+if ! [[ "${RUN_TIMEOUT_SECONDS}" =~ ^[1-9][0-9]*$ ]]; then
+  echo "LINKEDIN_DAILY_TIMEOUT_SECONDS must be a positive integer; got '${RUN_TIMEOUT_SECONDS}'." >&2
+  exit 1
+fi
+
+TIMEOUT_BIN="$(command -v timeout || command -v gtimeout || true)"
+if [[ -z "${TIMEOUT_BIN}" ]]; then
+  echo "GNU timeout is required but was not found on PATH." >&2
+  exit 1
+fi
 
 acquire_lock() {
   if mkdir "${LOCK_DIR}" 2>/dev/null; then
@@ -32,7 +43,11 @@ acquire_lock() {
   fi
 
   # The previous process died without running its EXIT trap.
-  rmdir "${LOCK_DIR}" 2>/dev/null || return 1
+  rm -f "${LOCK_DIR}/pid"
+  rmdir "${LOCK_DIR}" 2>/dev/null || {
+    echo "Could not remove stale lock directory ${LOCK_DIR}." >&2
+    return 1
+  }
   mkdir "${LOCK_DIR}" || return 1
   echo "$$" > "${LOCK_DIR}/pid"
 }
@@ -48,6 +63,7 @@ fi
 trap release_lock EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
+echo "[$(date '+%Y-%m-%d %H:%M:%S %Z')] Starting daily LinkedIn batch (limit=${DAILY_LIMIT}, timeout=${RUN_TIMEOUT_SECONDS}s)."
 
 if ! command -v docker >/dev/null; then
   echo "docker is not installed or is not on PATH." >&2
@@ -87,9 +103,17 @@ if ! docker exec kizuna-postgres pg_isready -U kizuna -d kizuna >/dev/null 2>&1;
 fi
 
 cd "${BACKEND_DIR}"
-uv run python scripts/batch_scrape_linkedin_profiles.py \
+"${TIMEOUT_BIN}" \
+  --verbose \
+  --signal=INT \
+  --kill-after=30s \
+  "${RUN_TIMEOUT_SECONDS}s" \
+  uv run python scripts/batch_scrape_linkedin_profiles.py \
   --limit "${DAILY_LIMIT}" \
   --headless
 run_status=$?
+if [[ "${run_status}" -eq 124 || "${run_status}" -eq 137 ]]; then
+  echo "[$(date '+%Y-%m-%d %H:%M:%S %Z')] Daily LinkedIn batch exceeded ${RUN_TIMEOUT_SECONDS}s and was terminated." >&2
+fi
 echo "[$(date '+%Y-%m-%d %H:%M:%S %Z')] Daily LinkedIn batch exited with status ${run_status}."
 exit "${run_status}"

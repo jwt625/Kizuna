@@ -83,6 +83,12 @@ Seed a small local dataset after the backend is running:
 curl -X POST http://localhost:8000/api/demo/seed
 ```
 
+## Daily Note JSONL
+
+The Claude skill in `.claude/skills/kizuna-note-jsonl` converts a day or month of Markdown notes into the versioned JSONL accepted by Kizuna. In Claude Code, invoke `/kizuna-note-jsonl` with the note path and requested date range, then upload the resulting `.jsonl` on the Imports page.
+
+Kizuna stages every record, auto-resolves only high-confidence unique exact entity matches, and requires review for ambiguous people, organizations, or locations before an event can be imported.
+
 ## Smoke Test
 
 1. Start Postgres, backend, and frontend with the commands above.

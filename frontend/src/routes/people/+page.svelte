@@ -1289,6 +1289,7 @@
 							<option>Email</option>
 							<option>Message</option>
 							<option>Meal</option>
+							<option>Conference</option>
 							<option>Work session</option>
 							<option>Intro</option>
 						</select>

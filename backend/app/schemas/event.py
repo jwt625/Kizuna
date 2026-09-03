@@ -16,6 +16,7 @@ EventType = Literal[
     "Message",
     "Intro",
     "Meal",
+    "Conference",
     "Event attendance",
     "Work session",
     "Supplier discussion",

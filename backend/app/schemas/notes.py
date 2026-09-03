@@ -99,6 +99,12 @@ class NoteEventDraftRead(TimestampedSchema):
     confidence: float | None
     review_status: str
     metadata_json: str | None
+    participant_refs: list[str] = []
+    organization_refs: list[str] = []
+    location_refs: list[str] = []
+    review_reasons: list[str] = []
+    unresolved_refs: list[str] = []
+    canonical_event_id: str | None = None
 
 
 class NoteExtractionRunRead(TimestampedSchema):

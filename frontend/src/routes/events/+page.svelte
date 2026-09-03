@@ -26,6 +26,7 @@
 		'Email',
 		'Message',
 		'Meal',
+		'Conference',
 		'Event attendance',
 		'Work session',
 		'Intro',

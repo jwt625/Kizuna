@@ -173,6 +173,20 @@ def test_event_updates_person_relationship_timeline_and_score() -> None:
     assert detail["last_interaction_date"].startswith("2026-04-20T17:00:00")
 
 
+def test_create_and_list_conference_event() -> None:
+    client = TestClient(app)
+
+    create_response = client.post(
+        "/api/events",
+        json={"title": "OFC", "type": "Conference", "started_at": "2026-03-15T09:00:00Z"},
+    )
+
+    assert create_response.status_code == 201
+    list_response = client.get("/api/events")
+    assert list_response.status_code == 200
+    assert list_response.json()[0]["type"] == "Conference"
+
+
 def test_reminder_snooze_and_complete_actions() -> None:
     client = TestClient(app)
 
@@ -190,7 +204,7 @@ def test_reminder_snooze_and_complete_actions() -> None:
 
     snooze_response = client.post(
         f"/api/reminders/{reminder_id}/snooze",
-        json={"snoozed_until": "2026-05-24T15:30:00Z"},
+        json={"snoozed_until": "2099-05-24T15:30:00Z"},
     )
     assert snooze_response.status_code == 200
     assert snooze_response.json()["status"] == "Snoozed"

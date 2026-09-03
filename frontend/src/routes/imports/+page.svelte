@@ -6,9 +6,11 @@
 		extractNoteSource,
 		getNoteProviderHealth,
 		getNoteSource,
+		importNotesJsonl,
 		importPeopleCsv,
 		listNoteSources,
 		reviewNoteMention,
+		reviewNoteEventDraft,
 		scanNoteSources,
 		updateNoteMention,
 		type NoteMention,
@@ -29,12 +31,27 @@
 	let error = $state('');
 	let result = $state<{ created: number; skipped: number; errors: string[] } | null>(null);
 
-	let noteRootPath = $state('/Users/wentaojiang/Documents/GitHub/daily-notes');
+	let noteRootPath = $state('');
+	let jsonlFile = $state<File | null>(null);
+	let uploadingJsonl = $state(false);
+	let jsonlResult = $state<{
+		lines_received: number;
+		staged: number;
+		skipped: number;
+		errors: string[];
+		source_ids: string[];
+	} | null>(null);
 	let providerHealth = $state<NoteProviderHealth | null>(null);
 	let sources = $state<NoteSource[]>([]);
 	let selectedSourceId = $state<string | null>(null);
 	let selectedSource = $state<NoteSourceDetail | null>(null);
-	let scanSummary = $state<{ files_seen: number; sections_seen: number; created: number; updated: number; unchanged: number } | null>(null);
+	let scanSummary = $state<{
+		files_seen: number;
+		sections_seen: number;
+		created: number;
+		updated: number;
+		unchanged: number;
+	} | null>(null);
 	let scanning = $state(false);
 	let loadingSources = $state(false);
 	let extracting = $state(false);
@@ -94,6 +111,23 @@
 			providerHealth = await getNoteProviderHealth();
 		} catch (err) {
 			notesError = err instanceof Error ? err.message : 'Failed to load provider health.';
+		}
+	}
+
+	async function submitJsonlImport() {
+		if (!jsonlFile) return;
+		uploadingJsonl = true;
+		notesError = '';
+		try {
+			jsonlResult = await importNotesJsonl(jsonlFile);
+			await refreshSources();
+			if (jsonlResult.source_ids.length > 0) {
+				await loadSourceDetail(jsonlResult.source_ids[0]);
+			}
+		} catch (err) {
+			notesError = err instanceof Error ? err.message : 'Failed to import JSONL.';
+		} finally {
+			uploadingJsonl = false;
 		}
 	}
 
@@ -183,6 +217,19 @@
 			}
 		} catch (err) {
 			notesError = err instanceof Error ? err.message : 'Failed to review mention.';
+		} finally {
+			reviewingMentionId = null;
+		}
+	}
+
+	async function reviewEventDraft(draftId: string, action: 'commit' | 'reject') {
+		reviewingMentionId = draftId;
+		notesError = '';
+		try {
+			await reviewNoteEventDraft(draftId, action);
+			if (selectedSourceId) await loadSourceDetail(selectedSourceId);
+		} catch (err) {
+			notesError = err instanceof Error ? err.message : 'Failed to review event.';
 		} finally {
 			reviewingMentionId = null;
 		}
@@ -304,7 +351,9 @@
 	function mentionsForStatus(kind: 'pending' | 'reviewed') {
 		const mentions = selectedSource?.mentions ?? [];
 		const filtered = mentions.filter((mention) =>
-			kind === 'pending' ? pendingStatuses.has(mention.review_status) : !pendingStatuses.has(mention.review_status)
+			kind === 'pending'
+				? pendingStatuses.has(mention.review_status)
+				: !pendingStatuses.has(mention.review_status)
 		);
 		return [...filtered].sort(
 			(left, right) => new Date(left.created_at).getTime() - new Date(right.created_at).getTime()
@@ -348,12 +397,24 @@
 				<h2>People CSV</h2>
 				<span>Dedupes by display name and email</span>
 			</div>
-			<form onsubmit={(event) => { event.preventDefault(); submitImport(); }}>
+			<form
+				onsubmit={(event) => {
+					event.preventDefault();
+					submitImport();
+				}}
+			>
 				<label class="wide">
 					<span>CSV file</span>
-					<input accept=".csv,text/csv" onchange={(event) => (file = (event.currentTarget as HTMLInputElement).files?.[0] || null)} type="file" />
+					<input
+						accept=".csv,text/csv"
+						onchange={(event) =>
+							(file = (event.currentTarget as HTMLInputElement).files?.[0] || null)}
+						type="file"
+					/>
 				</label>
-				<button type="submit" disabled={!file || uploading}>{uploading ? 'Importing…' : 'Import people'}</button>
+				<button type="submit" disabled={!file || uploading}
+					>{uploading ? 'Importing…' : 'Import people'}</button
+				>
 			</form>
 			{#if error}
 				<p class="notice">{error}</p>
@@ -373,28 +434,83 @@
 			</div>
 
 			<div class="stack">
+				<form
+					class="jsonl-import"
+					onsubmit={(event) => {
+						event.preventDefault();
+						submitJsonlImport();
+					}}
+				>
+					<label>
+						<span>Kizuna note JSONL</span>
+						<input
+							accept=".jsonl,application/x-ndjson,application/jsonl"
+							onchange={(event) =>
+								(jsonlFile = (event.currentTarget as HTMLInputElement).files?.[0] || null)}
+							type="file"
+						/>
+					</label>
+					<button type="submit" disabled={!jsonlFile || uploadingJsonl}>
+						{uploadingJsonl ? 'Staging…' : 'Stage JSONL'}
+					</button>
+				</form>
+
+				{#if jsonlResult}
+					<div class="summary">
+						<p>Lines: {jsonlResult.lines_received}</p>
+						<p>Staged: {jsonlResult.staged}</p>
+						<p>Unchanged: {jsonlResult.skipped}</p>
+						<p>Errors: {jsonlResult.errors.length}</p>
+					</div>
+					{#if jsonlResult.errors.length}
+						<ul class="messages">
+							{#each jsonlResult.errors as importError, index (`${index}-${importError}`)}
+								<li>{importError}</li>
+							{/each}
+						</ul>
+					{/if}
+				{/if}
+
 				<label>
 					<span>Notes root path</span>
-					<input bind:value={noteRootPath} />
+					<input bind:value={noteRootPath} placeholder="/path/to/notes" />
 				</label>
 
 				<div class="actions">
-					<button type="button" onclick={runScan} disabled={scanning}>{scanning ? 'Scanning…' : 'Scan notes'}</button>
-					<button type="button" onclick={refreshSources} disabled={loadingSources}>{loadingSources ? 'Refreshing…' : 'Refresh list'}</button>
+					<button type="button" onclick={runScan} disabled={scanning}
+						>{scanning ? 'Scanning…' : 'Scan notes'}</button
+					>
+					<button type="button" onclick={refreshSources} disabled={loadingSources}
+						>{loadingSources ? 'Refreshing…' : 'Refresh list'}</button
+					>
 				</div>
 
 				{#if providerHealth}
 					<div class="status-grid">
 						<div class="status-card">
 							<strong>Primary</strong>
-							<p>{providerHealth.primary.provider_name} · {providerHealth.primary.model_name || 'No model'}</p>
-							<p>{providerHealth.primary.reachable ? 'Reachable' : providerHealth.primary.detail || 'Unavailable'}</p>
+							<p>
+								{providerHealth.primary.provider_name} · {providerHealth.primary.model_name ||
+									'No model'}
+							</p>
+							<p>
+								{providerHealth.primary.reachable
+									? 'Reachable'
+									: providerHealth.primary.detail || 'Unavailable'}
+							</p>
 						</div>
 						{#if providerHealth.fallback}
 							<div class="status-card">
 								<strong>Fallback</strong>
-								<p>{providerHealth.fallback.provider_name} · {providerHealth.fallback.model_name || 'No model'}</p>
-								<p>{providerHealth.fallback.reachable ? 'Reachable' : providerHealth.fallback.detail || 'Unavailable'}</p>
+								<p>
+									{providerHealth.fallback.provider_name} · {providerHealth.fallback.model_name ||
+										'No model'}
+								</p>
+								<p>
+									{providerHealth.fallback.reachable
+										? 'Reachable'
+										: providerHealth.fallback.detail || 'Unavailable'}
+								</p>
 							</div>
 						{/if}
 					</div>
@@ -424,7 +540,11 @@
 							{#if sources.length}
 								{#each sources as source (source.id)}
 									<li class:selected={selectedSourceId === source.id}>
-										<button type="button" class="source-button" onclick={() => loadSourceDetail(source.id)}>
+										<button
+											type="button"
+											class="source-button"
+											onclick={() => loadSourceDetail(source.id)}
+										>
 											<strong>{source.heading}</strong>
 											<p>{source.note_date || 'No date'} · {source.extraction_status}</p>
 										</button>
@@ -458,9 +578,20 @@
 								{#if mentionsForStatus('pending').length}
 									{#each groupedMentions('pending') as group (group.type)}
 										<section class="group">
-											<button type="button" class="group-toggle" onclick={() => toggleFold(pendingFoldState, groupKey('pending', group.type))}>
+											<button
+												type="button"
+												class="group-toggle"
+												onclick={() =>
+													toggleFold(pendingFoldState, groupKey('pending', group.type))}
+											>
 												<strong>{group.type}</strong>
-												<span>{group.items.length} · {pendingFoldState[groupKey('pending', group.type)] === false ? 'collapsed' : 'open'}</span>
+												<span
+													>{group.items.length} · {pendingFoldState[
+														groupKey('pending', group.type)
+													] === false
+														? 'collapsed'
+														: 'open'}</span
+												>
 											</button>
 											{#if pendingFoldState[groupKey('pending', group.type)] !== false}
 												<ul class="mention-list">
@@ -471,15 +602,14 @@
 																<span>{mention.review_status}</span>
 															</div>
 															<div class="mention-meta">
-																<label>
-																	<span>Type</span>
-																	<select bind:value={mention.entity_type}>
-																		{#each mentionTypes as option (option)}
-																			<option value={option}>{option}</option>
-																		{/each}
-																	</select>
-																</label>
-																<button type="button" onclick={() => openTypeModal(mention)}>Edit details</button>
+																<span
+																	>{mention.entity_type} · extraction {mention.confidence === null
+																		? 'unknown'
+																		: `${Math.round(mention.confidence * 100)}%`}</span
+																>
+																<button type="button" onclick={() => openTypeModal(mention)}
+																	>Edit details</button
+																>
 															</div>
 															<p>{mention.evidence_text || 'No evidence snippet'}</p>
 															{#if mention.candidates.length}
@@ -488,9 +618,18 @@
 																		<div class="candidate">
 																			<div>
 																				<strong>{candidate.label}</strong>
-																				<p>{candidate.subtitle || candidate.rationale || 'Candidate match'}</p>
+																				<p>
+																					{Math.round(candidate.score * 100)}% match · {candidate.subtitle ||
+																						candidate.rationale ||
+																						'Candidate match'}
+																				</p>
 																			</div>
-																			<button type="button" onclick={() => reviewMention(mention.id, 'accept_match', candidate.id)} disabled={reviewingMentionId === mention.id}>
+																			<button
+																				type="button"
+																				onclick={() =>
+																					reviewMention(mention.id, 'accept_match', candidate.id)}
+																				disabled={reviewingMentionId === mention.id}
+																			>
 																				Match
 																			</button>
 																		</div>
@@ -498,9 +637,21 @@
 																</div>
 															{/if}
 															<div class="actions compact">
-																<button type="button" onclick={() => openCreateModal(mention)} disabled={reviewingMentionId === mention.id}>Create new</button>
-																<button type="button" onclick={() => reviewMention(mention.id, 'defer')} disabled={reviewingMentionId === mention.id}>Defer</button>
-																<button type="button" onclick={() => reviewMention(mention.id, 'reject')} disabled={reviewingMentionId === mention.id}>Reject</button>
+																<button
+																	type="button"
+																	onclick={() => openCreateModal(mention)}
+																	disabled={reviewingMentionId === mention.id}>Create new</button
+																>
+																<button
+																	type="button"
+																	onclick={() => reviewMention(mention.id, 'defer')}
+																	disabled={reviewingMentionId === mention.id}>Defer</button
+																>
+																<button
+																	type="button"
+																	onclick={() => reviewMention(mention.id, 'reject')}
+																	disabled={reviewingMentionId === mention.id}>Reject</button
+																>
 															</div>
 														</li>
 													{/each}
@@ -518,9 +669,20 @@
 								{#if mentionsForStatus('reviewed').length}
 									{#each groupedMentions('reviewed') as group (group.type)}
 										<section class="group">
-											<button type="button" class="group-toggle" onclick={() => toggleFold(reviewedFoldState, groupKey('reviewed', group.type))}>
+											<button
+												type="button"
+												class="group-toggle"
+												onclick={() =>
+													toggleFold(reviewedFoldState, groupKey('reviewed', group.type))}
+											>
 												<strong>{group.type}</strong>
-												<span>{group.items.length} · {reviewedFoldState[groupKey('reviewed', group.type)] === false ? 'collapsed' : 'open'}</span>
+												<span
+													>{group.items.length} · {reviewedFoldState[
+														groupKey('reviewed', group.type)
+													] === false
+														? 'collapsed'
+														: 'open'}</span
+												>
 											</button>
 											{#if reviewedFoldState[groupKey('reviewed', group.type)] !== false}
 												<ul class="messages">
@@ -546,7 +708,39 @@
 										{#each selectedSource.event_drafts as draft (draft.id)}
 											<li>
 												<strong>{draft.title}</strong>
+												<p>
+													{draft.event_type} · {draft.started_on || 'Unknown date'} · extraction {draft.confidence ===
+													null
+														? 'unknown'
+														: `${Math.round(draft.confidence * 100)}%`}
+												</p>
 												<p>{draft.summary || draft.evidence_text || 'No summary'}</p>
+												{#if draft.review_reasons.length}
+													<p>Review: {draft.review_reasons.join('; ')}</p>
+												{/if}
+												{#if draft.unresolved_refs.length}
+													<p>Resolve first: {draft.unresolved_refs.join(', ')}</p>
+												{/if}
+												<p>Status: {draft.review_status}</p>
+												{#if !['Imported', 'Rejected'].includes(draft.review_status)}
+													<div class="actions compact">
+														<button
+															type="button"
+															onclick={() => reviewEventDraft(draft.id, 'commit')}
+															disabled={reviewingMentionId === draft.id ||
+																draft.unresolved_refs.length > 0}
+														>
+															{draft.review_status === 'Needs review'
+																? 'Confirm and import'
+																: 'Import event'}
+														</button>
+														<button
+															type="button"
+															onclick={() => reviewEventDraft(draft.id, 'reject')}
+															disabled={reviewingMentionId === draft.id}>Reject</button
+														>
+													</div>
+												{/if}
 											</li>
 										{/each}
 									</ul>
@@ -588,7 +782,13 @@
 				</div>
 
 				{#if modalMode === 'edit-type'}
-					<form class="stack" onsubmit={(event) => { event.preventDefault(); submitMentionEdit(); }}>
+					<form
+						class="stack"
+						onsubmit={(event) => {
+							event.preventDefault();
+							submitMentionEdit();
+						}}
+					>
 						<label>
 							<span>Type</span>
 							<select bind:value={mentionEditForm.entity_type}>
@@ -609,10 +809,18 @@
 							<span>Evidence</span>
 							<textarea bind:value={mentionEditForm.evidence_text} rows="4"></textarea>
 						</label>
-						<button type="submit" disabled={reviewingMentionId === activeMention.id}>Save mention</button>
+						<button type="submit" disabled={reviewingMentionId === activeMention.id}
+							>Save mention</button
+						>
 					</form>
 				{:else}
-					<form class="stack" onsubmit={(event) => { event.preventDefault(); submitCreateCanonical(); }}>
+					<form
+						class="stack"
+						onsubmit={(event) => {
+							event.preventDefault();
+							submitCreateCanonical();
+						}}
+					>
 						<label>
 							<span>Entity type</span>
 							<select bind:value={createForm.entity_type}>
@@ -626,34 +834,82 @@
 							<label><span>Display name</span><input bind:value={createForm.display_name} /></label>
 							<label><span>Given name</span><input bind:value={createForm.given_name} /></label>
 							<label><span>Family name</span><input bind:value={createForm.family_name} /></label>
-							<label><span>Primary location</span><input bind:value={createForm.primary_location} /></label>
-							<label><span>Relationship summary</span><textarea bind:value={createForm.relationship_summary} rows="3"></textarea></label>
-							<label><span>How we met</span><textarea bind:value={createForm.how_we_met} rows="3"></textarea></label>
-							<label><span>Notes</span><textarea bind:value={createForm.notes} rows="4"></textarea></label>
+							<label
+								><span>Primary location</span><input
+									bind:value={createForm.primary_location}
+								/></label
+							>
+							<label
+								><span>Relationship summary</span><textarea
+									bind:value={createForm.relationship_summary}
+									rows="3"
+								></textarea></label
+							>
+							<label
+								><span>How we met</span><textarea bind:value={createForm.how_we_met} rows="3"
+								></textarea></label
+							>
+							<label
+								><span>Notes</span><textarea bind:value={createForm.notes} rows="4"
+								></textarea></label
+							>
 						{:else if createForm.entity_type === 'Organization'}
 							<label><span>Name</span><input bind:value={createForm.display_name} /></label>
 							<label><span>Type</span><input bind:value={createForm.organization_type} /></label>
 							<label><span>Industry</span><input bind:value={createForm.industry} /></label>
 							<label><span>Location</span><input bind:value={createForm.primary_location} /></label>
-							<label><span>Notes</span><textarea bind:value={createForm.notes} rows="4"></textarea></label>
+							<label
+								><span>Notes</span><textarea bind:value={createForm.notes} rows="4"
+								></textarea></label
+							>
 						{:else if createForm.entity_type === 'Location'}
 							<label><span>Label</span><input bind:value={createForm.location_label} /></label>
-							<label><span>Street / address line</span><input bind:value={createForm.location_address_line} /></label>
+							<label
+								><span>Street / address line</span><input
+									bind:value={createForm.location_address_line}
+								/></label
+							>
 							<label><span>City</span><input bind:value={createForm.location_city} /></label>
 							<label><span>Region</span><input bind:value={createForm.location_region} /></label>
 							<label><span>Country</span><input bind:value={createForm.location_country} /></label>
-							<label><span>Location type</span><input bind:value={createForm.location_type} placeholder="Home, Work, Cafe" /></label>
-							<label><span>Notes</span><textarea bind:value={createForm.notes} rows="4"></textarea></label>
+							<label
+								><span>Location type</span><input
+									bind:value={createForm.location_type}
+									placeholder="Home, Work, Cafe"
+								/></label
+							>
+							<label
+								><span>Notes</span><textarea bind:value={createForm.notes} rows="4"
+								></textarea></label
+							>
 						{:else}
 							<label><span>Title</span><input bind:value={createForm.event_title} /></label>
 							<label><span>Type</span><input bind:value={createForm.event_type} /></label>
-							<label><span>Started at</span><input bind:value={createForm.event_started_at} type="datetime-local" /></label>
-							<label><span>Ended at</span><input bind:value={createForm.event_ended_at} type="datetime-local" /></label>
-							<label><span>Summary</span><textarea bind:value={createForm.event_summary} rows="4"></textarea></label>
-							<label><span>Notes</span><textarea bind:value={createForm.notes} rows="4"></textarea></label>
+							<label
+								><span>Started at</span><input
+									bind:value={createForm.event_started_at}
+									type="datetime-local"
+								/></label
+							>
+							<label
+								><span>Ended at</span><input
+									bind:value={createForm.event_ended_at}
+									type="datetime-local"
+								/></label
+							>
+							<label
+								><span>Summary</span><textarea bind:value={createForm.event_summary} rows="4"
+								></textarea></label
+							>
+							<label
+								><span>Notes</span><textarea bind:value={createForm.notes} rows="4"
+								></textarea></label
+							>
 						{/if}
 
-						<button type="submit" disabled={reviewingMentionId === activeMention.id}>Create {createForm.entity_type}</button>
+						<button type="submit" disabled={reviewingMentionId === activeMention.id}
+							>Create {createForm.entity_type}</button
+						>
 					</form>
 				{/if}
 			</div>
@@ -662,48 +918,248 @@
 </main>
 
 <style>
-	.shell { min-height: 100vh; padding: 1.25rem; }
-	.topbar { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: end; gap: 1rem; padding-bottom: 1rem; border-bottom: 1px solid var(--line-strong); }
-	.grid { display: grid; grid-template-columns: minmax(18rem, 24rem) minmax(0, 1fr); gap: 1rem; margin-top: 1rem; }
-	.brand, .meta, .panel-header span, .subpanel-header span, label span { font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.12em; color: var(--muted); text-decoration: none; }
-	h1 { margin: 0.35rem 0 0; font-size: clamp(2rem, 4vw, 3rem); letter-spacing: -0.05em; }
-	h2, h3, h4 { margin: 0; font-size: 0.9rem; text-transform: uppercase; letter-spacing: 0.08em; }
-	h4 { font-size: 0.8rem; }
-	.panel, .subpanel, .notice, .modal { border: 1px solid var(--line-strong); background: var(--panel-strong); box-shadow: var(--shadow); }
-	.panel-header, .subpanel-header { display: flex; justify-content: space-between; align-items: center; padding: 0.75rem 0.85rem; border-bottom: 1px solid var(--line); }
-	form, .stack, .detail-block { display: grid; gap: 1rem; padding: 0.85rem; }
-	.notes-panel { min-width: 0; }
-	.notes-grid { display: grid; grid-template-columns: minmax(16rem, 20rem) minmax(0, 1fr); gap: 1rem; }
-	.source-list, .messages, .mention-list { list-style: none; margin: 0; padding: 0; }
-	.source-list li, .messages li, .mention-list li { border-bottom: 1px solid var(--line); }
-	.source-list li:last-child, .messages li:last-child, .mention-list li:last-child { border-bottom: 0; }
-	.source-button { width: 100%; text-align: left; border: 0; background: transparent; padding: 0.85rem; color: var(--text); cursor: pointer; }
-	.source-list li.selected { background: var(--selection-row-bg); }
-	.source-button p, .candidate p, .mention-list p, .muted, .status-card p, .messages p { margin: 0.2rem 0 0; color: var(--muted); }
-	label { display: grid; gap: 0.35rem; }
-	input, button, select, textarea { width: 100%; border: 1px solid var(--line); background: var(--panel); padding: 0.62rem 0.72rem; color: var(--text); }
-	button { cursor: pointer; }
-	textarea { resize: vertical; }
-	pre { margin: 0; white-space: pre-wrap; background: var(--panel); border: 1px solid var(--line); padding: 0.75rem; max-height: 18rem; overflow: auto; }
-	.summary { display: grid; grid-template-columns: repeat(auto-fit, minmax(8rem, 1fr)); gap: 0.5rem; padding: 0.85rem; }
-	.summary p { margin: 0; padding: 0.55rem 0.65rem; border: 1px solid var(--line); background: var(--panel); }
-	.notice { margin: 0.85rem; padding: 0.85rem; }
-	.actions { display: flex; gap: 0.75rem; flex-wrap: wrap; }
-	.actions.compact { padding: 0; }
-	.status-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr)); gap: 0.75rem; }
-	.status-card { border: 1px solid var(--line); background: var(--panel); padding: 0.75rem; }
-	.candidate-list { display: grid; gap: 0.5rem; }
-	.candidate { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 0.75rem; align-items: start; border: 1px solid var(--line); background: var(--panel); padding: 0.65rem; }
-	.mention-head { display: flex; justify-content: space-between; gap: 0.75rem; align-items: baseline; }
-	.mention-meta { display: grid; grid-template-columns: minmax(12rem, 16rem) auto; gap: 0.75rem; align-items: end; }
-	.empty { padding: 0.85rem; color: var(--muted); }
-	.detail { min-width: 0; }
-	.group { border: 1px solid var(--line); }
-	.group-toggle { display: flex; justify-content: space-between; align-items: center; border: 0; border-bottom: 1px solid var(--line); background: var(--panel); padding: 0.7rem 0.85rem; }
-	.modal-backdrop { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.45); display: grid; place-items: center; padding: 1rem; }
-	.modal { width: min(42rem, 100%); max-height: calc(100vh - 2rem); overflow: auto; }
-	.close-button { width: auto; }
+	.shell {
+		min-height: 100vh;
+		padding: 1.25rem;
+	}
+	.topbar {
+		display: grid;
+		grid-template-columns: minmax(0, 1fr) auto;
+		align-items: end;
+		gap: 1rem;
+		padding-bottom: 1rem;
+		border-bottom: 1px solid var(--line-strong);
+	}
+	.grid {
+		display: grid;
+		grid-template-columns: minmax(18rem, 24rem) minmax(0, 1fr);
+		gap: 1rem;
+		margin-top: 1rem;
+	}
+	.brand,
+	.meta,
+	.panel-header span,
+	.subpanel-header span,
+	label span {
+		font-size: 0.72rem;
+		text-transform: uppercase;
+		letter-spacing: 0.12em;
+		color: var(--muted);
+		text-decoration: none;
+	}
+	h1 {
+		margin: 0.35rem 0 0;
+		font-size: clamp(2rem, 4vw, 3rem);
+		letter-spacing: -0.05em;
+	}
+	h2,
+	h3,
+	h4 {
+		margin: 0;
+		font-size: 0.9rem;
+		text-transform: uppercase;
+		letter-spacing: 0.08em;
+	}
+	h4 {
+		font-size: 0.8rem;
+	}
+	.panel,
+	.subpanel,
+	.notice,
+	.modal {
+		border: 1px solid var(--line-strong);
+		background: var(--panel-strong);
+		box-shadow: var(--shadow);
+	}
+	.panel-header,
+	.subpanel-header {
+		display: flex;
+		justify-content: space-between;
+		align-items: center;
+		padding: 0.75rem 0.85rem;
+		border-bottom: 1px solid var(--line);
+	}
+	form,
+	.stack,
+	.detail-block {
+		display: grid;
+		gap: 1rem;
+		padding: 0.85rem;
+	}
+	.notes-panel {
+		min-width: 0;
+	}
+	.notes-grid {
+		display: grid;
+		grid-template-columns: minmax(16rem, 20rem) minmax(0, 1fr);
+		gap: 1rem;
+	}
+	.source-list,
+	.messages,
+	.mention-list {
+		list-style: none;
+		margin: 0;
+		padding: 0;
+	}
+	.source-list li,
+	.messages li,
+	.mention-list li {
+		border-bottom: 1px solid var(--line);
+	}
+	.source-list li:last-child,
+	.messages li:last-child,
+	.mention-list li:last-child {
+		border-bottom: 0;
+	}
+	.source-button {
+		width: 100%;
+		text-align: left;
+		border: 0;
+		background: transparent;
+		padding: 0.85rem;
+		color: var(--text);
+		cursor: pointer;
+	}
+	.source-list li.selected {
+		background: var(--selection-row-bg);
+	}
+	.source-button p,
+	.candidate p,
+	.mention-list p,
+	.muted,
+	.status-card p,
+	.messages p {
+		margin: 0.2rem 0 0;
+		color: var(--muted);
+	}
+	label {
+		display: grid;
+		gap: 0.35rem;
+	}
+	input,
+	button,
+	select,
+	textarea {
+		width: 100%;
+		border: 1px solid var(--line);
+		background: var(--panel);
+		padding: 0.62rem 0.72rem;
+		color: var(--text);
+	}
+	button {
+		cursor: pointer;
+	}
+	textarea {
+		resize: vertical;
+	}
+	pre {
+		margin: 0;
+		white-space: pre-wrap;
+		background: var(--panel);
+		border: 1px solid var(--line);
+		padding: 0.75rem;
+		max-height: 18rem;
+		overflow: auto;
+	}
+	.summary {
+		display: grid;
+		grid-template-columns: repeat(auto-fit, minmax(8rem, 1fr));
+		gap: 0.5rem;
+		padding: 0.85rem;
+	}
+	.summary p {
+		margin: 0;
+		padding: 0.55rem 0.65rem;
+		border: 1px solid var(--line);
+		background: var(--panel);
+	}
+	.notice {
+		margin: 0.85rem;
+		padding: 0.85rem;
+	}
+	.actions {
+		display: flex;
+		gap: 0.75rem;
+		flex-wrap: wrap;
+	}
+	.actions.compact {
+		padding: 0;
+	}
+	.status-grid {
+		display: grid;
+		grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr));
+		gap: 0.75rem;
+	}
+	.status-card {
+		border: 1px solid var(--line);
+		background: var(--panel);
+		padding: 0.75rem;
+	}
+	.candidate-list {
+		display: grid;
+		gap: 0.5rem;
+	}
+	.candidate {
+		display: grid;
+		grid-template-columns: minmax(0, 1fr) auto;
+		gap: 0.75rem;
+		align-items: start;
+		border: 1px solid var(--line);
+		background: var(--panel);
+		padding: 0.65rem;
+	}
+	.mention-head {
+		display: flex;
+		justify-content: space-between;
+		gap: 0.75rem;
+		align-items: baseline;
+	}
+	.mention-meta {
+		display: grid;
+		grid-template-columns: minmax(12rem, 16rem) auto;
+		gap: 0.75rem;
+		align-items: end;
+	}
+	.empty {
+		padding: 0.85rem;
+		color: var(--muted);
+	}
+	.detail {
+		min-width: 0;
+	}
+	.group {
+		border: 1px solid var(--line);
+	}
+	.group-toggle {
+		display: flex;
+		justify-content: space-between;
+		align-items: center;
+		border: 0;
+		border-bottom: 1px solid var(--line);
+		background: var(--panel);
+		padding: 0.7rem 0.85rem;
+	}
+	.modal-backdrop {
+		position: fixed;
+		inset: 0;
+		background: rgba(0, 0, 0, 0.45);
+		display: grid;
+		place-items: center;
+		padding: 1rem;
+	}
+	.modal {
+		width: min(42rem, 100%);
+		max-height: calc(100vh - 2rem);
+		overflow: auto;
+	}
+	.close-button {
+		width: auto;
+	}
 	@media (max-width: 1100px) {
-		.grid, .notes-grid, .mention-meta { grid-template-columns: 1fr; }
+		.grid,
+		.notes-grid,
+		.mention-meta {
+			grid-template-columns: 1fr;
+		}
 	}
 </style>

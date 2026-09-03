@@ -15,6 +15,7 @@ TYPE_WEIGHTS = {
     "Email": 0.35,
     "Intro": 0.9,
     "Work session": 1.4,
+    "Conference": 0.7,
     "Event attendance": 0.7,
     "Personal milestone": 1.3,
     "Note": 0.25,

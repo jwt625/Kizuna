@@ -1,4 +1,7 @@
-const API_BASE = (import.meta.env.PUBLIC_API_BASE_URL || 'http://localhost:8000/api').replace(/\/$/, '');
+const API_BASE = (import.meta.env.PUBLIC_API_BASE_URL || 'http://localhost:8000/api').replace(
+	/\/$/,
+	''
+);
 
 export type ContactMethod = {
 	id: string;
@@ -285,6 +288,12 @@ export type NoteEventDraft = {
 	confidence: number | null;
 	review_status: string;
 	metadata_json: string | null;
+	participant_refs: string[];
+	organization_refs: string[];
+	location_refs: string[];
+	review_reasons: string[];
+	unresolved_refs: string[];
+	canonical_event_id: string | null;
 	created_at: string;
 	updated_at: string;
 };
@@ -345,7 +354,13 @@ function withQuery(path: string, params: Record<string, QueryValue>): string {
 }
 
 export function listPeople(
-	params: { q?: string; relationship_category?: string; city?: string; limit?: number; offset?: number } = {}
+	params: {
+		q?: string;
+		relationship_category?: string;
+		city?: string;
+		limit?: number;
+		offset?: number;
+	} = {}
 ) {
 	return request<Person[]>(withQuery('/people', params));
 }
@@ -366,8 +381,19 @@ export function createPerson(payload: {
 	relationship_summary?: string;
 	how_we_met?: string;
 	notes?: string;
-	contact_methods: Array<{ type: string; value: string; label?: string; is_primary?: boolean; notes?: string }>;
-	external_profiles: Array<{ platform: string; url_or_handle: string; label?: string; notes?: string }>;
+	contact_methods: Array<{
+		type: string;
+		value: string;
+		label?: string;
+		is_primary?: boolean;
+		notes?: string;
+	}>;
+	external_profiles: Array<{
+		platform: string;
+		url_or_handle: string;
+		label?: string;
+		notes?: string;
+	}>;
 }) {
 	return request<Person>('/people', {
 		method: 'POST',
@@ -449,7 +475,13 @@ export function addPersonOrganizationRole(
 }
 
 export function listLocations(
-	params: { q?: string; city?: string; country?: string; location_type?: string; limit?: number } = {}
+	params: {
+		q?: string;
+		city?: string;
+		country?: string;
+		location_type?: string;
+		limit?: number;
+	} = {}
 ) {
 	return request<Location[]>(withQuery('/locations', params));
 }
@@ -536,7 +568,10 @@ export function updateOrganization(
 	});
 }
 
-export function addOrganizationTag(organizationId: string, payload: { name: string; color?: string }) {
+export function addOrganizationTag(
+	organizationId: string,
+	payload: { name: string; color?: string }
+) {
 	return request<OrganizationDetail>(`/organizations/${organizationId}/tags`, {
 		method: 'POST',
 		body: JSON.stringify(payload)
@@ -556,7 +591,13 @@ export function addOrganizationLocation(
 }
 
 export function listEvents(
-	params: { q?: string; person_id?: string; organization_id?: string; location_id?: string; limit?: number } = {}
+	params: {
+		q?: string;
+		person_id?: string;
+		organization_id?: string;
+		location_id?: string;
+		limit?: number;
+	} = {}
 ) {
 	return request<Event[]>(withQuery('/events', params));
 }
@@ -699,6 +740,25 @@ export async function importPeopleCsv(file: File) {
 	return response.json() as Promise<{ created: number; skipped: number; errors: string[] }>;
 }
 
+export async function importNotesJsonl(file: File) {
+	const formData = new FormData();
+	formData.append('file', file);
+	const response = await fetch(`${API_BASE}/imports/notes-jsonl`, {
+		method: 'POST',
+		body: formData
+	});
+	if (!response.ok) {
+		throw new Error((await response.text()) || `Request failed with status ${response.status}`);
+	}
+	return response.json() as Promise<{
+		lines_received: number;
+		staged: number;
+		skipped: number;
+		errors: string[];
+		source_ids: string[];
+	}>;
+}
+
 export function getNoteProviderHealth() {
 	return request<NoteProviderHealth>('/notes/provider-health');
 }
@@ -709,13 +769,17 @@ export function scanNoteSources(payload: {
 	max_files?: number;
 	include_glob?: string;
 }) {
-	return request<{ files_seen: number; sections_seen: number; created: number; updated: number; unchanged: number; sources: NoteSource[] }>(
-		'/notes/scan',
-		{
-			method: 'POST',
-			body: JSON.stringify(payload)
-		}
-	);
+	return request<{
+		files_seen: number;
+		sections_seen: number;
+		created: number;
+		updated: number;
+		unchanged: number;
+		sources: NoteSource[];
+	}>('/notes/scan', {
+		method: 'POST',
+		body: JSON.stringify(payload)
+	});
 }
 
 export function listNoteSources(params: { extraction_status?: string; limit?: number } = {}) {
@@ -762,6 +826,16 @@ export function reviewNoteMention(
 	});
 }
 
+export function reviewNoteEventDraft(draftId: string, action: 'commit' | 'reject') {
+	return request<{ event_draft_id: string; status: string; canonical_event_id: string | null }>(
+		`/notes/event-drafts/${draftId}/review`,
+		{
+			method: 'POST',
+			body: JSON.stringify({ action })
+		}
+	);
+}
+
 export function updateNoteMention(
 	mentionId: string,
 	payload: {
@@ -806,11 +880,12 @@ export function createCanonicalFromNoteMention(
 		selected_location_ids?: string[];
 	}
 ) {
-	return request<{ entity_type: string; entity_id: string; review_decision: { id: string; action: string } }>(
-		`/notes/mentions/${mentionId}/create-canonical`,
-		{
-			method: 'POST',
-			body: JSON.stringify(payload)
-		}
-	);
+	return request<{
+		entity_type: string;
+		entity_id: string;
+		review_decision: { id: string; action: string };
+	}>(`/notes/mentions/${mentionId}/create-canonical`, {
+		method: 'POST',
+		body: JSON.stringify(payload)
+	});
 }

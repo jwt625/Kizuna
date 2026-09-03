@@ -41,9 +41,11 @@ from app.schemas.notes import (
     NoteSourceListResponse,
     NoteSourceRead,
 )
+from app.schemas.imports import NoteEventReviewRequest, NoteEventReviewResult
 from app.services.note_llm import PROMPT_VERSION, get_note_extraction_provider
 from app.services.note_parsing import normalize_mention_text, parse_note_sections
 from app.services.note_retrieval import find_candidate_matches
+from app.services.note_jsonl import commit_event_draft, event_reference_summary, reject_event_draft
 
 
 router = APIRouter(prefix="/notes", tags=["notes"])
@@ -196,6 +198,9 @@ def review_note_mention(mention_id: UUID, payload: NoteReviewUpdate, db: DbSessi
     if mention is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Note mention not found")
 
+    if payload.action == "accept_match" and payload.selected_candidate_id is None:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="accept_match requires a selected candidate")
+
     if payload.selected_candidate_id is not None:
         candidates = list(db.scalars(select(NoteMatchCandidate).where(NoteMatchCandidate.mention_id == mention.id)))
         found = False
@@ -227,6 +232,24 @@ def review_note_mention(mention_id: UUID, payload: NoteReviewUpdate, db: DbSessi
     return NoteReviewDecisionRead.model_validate(decision)
 
 
+@router.post("/event-drafts/{draft_id}/review", response_model=NoteEventReviewResult)
+def review_event_draft(
+    draft_id: UUID, payload: NoteEventReviewRequest, db: DbSession
+) -> NoteEventReviewResult:
+    draft = db.get(NoteEventDraft, draft_id)
+    if draft is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Event draft not found")
+    if payload.action == "reject":
+        reject_event_draft(draft)
+        db.commit()
+        return NoteEventReviewResult(event_draft_id=str(draft.id), status=draft.review_status)
+    event = commit_event_draft(db, draft)
+    db.commit()
+    return NoteEventReviewResult(
+        event_draft_id=str(draft.id), status=draft.review_status, canonical_event_id=str(event.id)
+    )
+
+
 @router.patch("/mentions/{mention_id}", response_model=NoteEntityMentionRead)
 def update_note_mention(mention_id: UUID, payload: NoteMentionUpdate, db: DbSession) -> NoteEntityMentionRead:
     mention = db.scalar(select(NoteEntityMention).where(NoteEntityMention.id == mention_id))
@@ -238,6 +261,7 @@ def update_note_mention(mention_id: UUID, payload: NoteMentionUpdate, db: DbSess
     mention.evidence_text = payload.evidence_text
     mention.review_status = "Pending"
     db.execute(delete(NoteMatchCandidate).where(NoteMatchCandidate.mention_id == mention.id))
+    db.execute(delete(NoteReviewDecision).where(NoteReviewDecision.mention_id == mention.id))
     candidates = find_candidate_matches(db, mention.entity_type, mention.raw_text, mention.normalized_text)
     for rank, candidate in enumerate(candidates, start=1):
         db.add(
@@ -432,7 +456,7 @@ def _serialize_source_detail(db: DbSession, source: NoteSource) -> NoteSourceDet
         **NoteSourceRead.model_validate(source).model_dump(),
         extraction_runs=[NoteExtractionRunRead.model_validate(run) for run in runs],
         mentions=[_serialize_mention(db, mention) for mention in mentions],
-        event_drafts=[NoteEventDraftRead.model_validate(event_draft) for event_draft in event_drafts],
+        event_drafts=[_serialize_event_draft(db, event_draft) for event_draft in event_drafts],
     )
 
 
@@ -443,4 +467,20 @@ def _serialize_mention(db: DbSession, mention: NoteEntityMention) -> NoteEntityM
     return NoteEntityMentionRead(
         **NoteEntityMentionRead.model_validate(mention).model_dump(exclude={"candidates"}),
         candidates=[NoteMatchCandidateRead.model_validate(candidate) for candidate in candidates],
+    )
+
+
+def _serialize_event_draft(db: DbSession, event_draft: NoteEventDraft) -> NoteEventDraftRead:
+    return NoteEventDraftRead(
+        **NoteEventDraftRead.model_validate(event_draft).model_dump(
+            exclude={
+                "participant_refs",
+                "organization_refs",
+                "location_refs",
+                "review_reasons",
+                "unresolved_refs",
+                "canonical_event_id",
+            }
+        ),
+        **event_reference_summary(db, event_draft),
     )

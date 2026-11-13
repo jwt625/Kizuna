@@ -102,13 +102,14 @@ It:
   30-second graceful-shutdown window before forcing termination
 - removes abandoned PID locks left by a previously killed wrapper
 - runs headless and processes the next 50 runnable profiles by default
+- on exit (success, failure, timeout, or signal) stops `kizuna-postgres` and quits
+  Docker Desktop; a run skipped because another run holds the lock leaves both alone
 
 Override the batch limit with `LINKEDIN_DAILY_LIMIT` and the timeout (in seconds) with
 `LINKEDIN_DAILY_TIMEOUT_SECONDS`. The wrapper is intended to be called by macOS
 `launchd` (preferred on laptops because a run missed during sleep is started after
 wake) or by cron. A timed-out run exits with status 124 after graceful cleanup, or
-137 if the process group requires forced termination. It does not stop Postgres after
-a run.
+137 if the process group requires forced termination.
 
 ## Why Selenium + Firefox Profile
 
